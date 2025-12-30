@@ -1,6 +1,7 @@
 % Gestor de archivos compartidos
 -module(file_manager).
 -include("config.hrl").
+-include_lib("kernel/include/file.hrl").
 -export([start/0, stop/0, get_shared_files/0]).
 
 % Arranca el proceso que maneja los archivos
