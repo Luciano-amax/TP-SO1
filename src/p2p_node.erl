@@ -2,44 +2,42 @@
 -export([start/1, stop/0]).
 -include("config.hrl").
 
-% Módulo coordinador principal del nodo P2P
-% Inicializa todos los componentes y lanza la CLI
+% Inicia el nodo P2P completo
 start(TcpPort) ->
-    % Limpiamos cualquier registro previo de todos los procesos
     catch unregister(p2p_node),
     catch unregister(file_manager),
     catch unregister(node_registry),
     catch unregister(tcp_server),
     catch unregister(discovery),
+    catch unregister(hello_sender),
+    catch unregister(hello_receiver),
     
     timer:sleep(1000),
     
     io:format("~n=== Iniciando nodo P2P ===~n~n"),
     
-    % 1. Escanear archivos compartidos
     io:format("Leyendo carpeta compartida..."),
     FileManagerPid = file_manager:start(),
     io:format("Completo~n"),
     
-    % 2. Consenso de ID
     io:format("Obteniendo nombre de Nodo..."),
     {ok, NodeId} = discovery:request_node_id(),
     io:format("NodoID confirmado: ~s~n", [NodeId]),
     
-    % 3. Iniciar registro de nodos
     io:format("Creando registro de nodos..."),
     NodeRegistryPid = node_registry:start(),
     io:format("Completo~n"),
     
-    % 4. Iniciar servidor TCP
     io:format("Iniciando servidor TCP..."),
     TcpServerPid = tcp_server:start(TcpPort),
     io:format("Completo~n"),
     
-    % 5. Registrar este proceso para que CLI pueda consultarnos
+    io:format("Iniciando broadcasts HELLO..."),
+    ok = hello_broadcast:start(NodeId, TcpPort),
+    io:format("Completo~n"),
+    
     register(p2p_node, self()),
     
-    % 6. Guardar NodeId en el diccionario del proceso para que CLI lo consulte
     put(node_id, NodeId),
     put(file_manager, FileManagerPid),
     put(node_registry, NodeRegistryPid),
@@ -58,6 +56,7 @@ start(TcpPort) ->
     io:format("~nCerrando nodo...~n"),
     stop().
 
+% Detiene el nodo y todos sus componentes
 stop() ->
     % Detener todos los procesos hijos
     case whereis(p2p_node) of
@@ -65,10 +64,8 @@ stop() ->
             io:format("Nodo ya detenido~n"),
             ok;
         Pid ->
-            % Obtener PIDs de los procesos registrados
             case process_info(Pid, dictionary) of
                 {dictionary, Dict} ->
-                    % Detener cada componente
                     case proplists:get_value(tcp_server, Dict) of
                         undefined -> ok;
                         TcpPid -> exit(TcpPid, shutdown)
@@ -80,6 +77,14 @@ stop() ->
                     case proplists:get_value(node_registry, Dict) of
                         undefined -> ok;
                         NrPid -> exit(NrPid, shutdown)
+                    end,
+                    case proplists:get_value(hello_sender, Dict) of
+                        undefined -> ok;
+                        HsPid -> exit(HsPid, shutdown)
+                    end,
+                    case proplists:get_value(hello_receiver, Dict) of
+                        undefined -> ok;
+                        HrPid -> exit(HrPid, shutdown)
                     end;
                 _ -> ok
             end,

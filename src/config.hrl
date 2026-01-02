@@ -11,11 +11,10 @@
 -define(DOWNLOAD_DIR, "./descargas").
 
 %% Timeouts y intervalos
--define(ID_REQUEST_TIMEOUT, 10000).     % 10 segundos para consenso ID
--define(HELLO_INTERVAL_MIN, 15000).     % 15 segundos mínimo
--define(HELLO_INTERVAL_MAX, 20000).     % 20 segundos máximo
--define(INACTIVITY_TIMEOUT, 45).        % 45 segundos sin HELLO = inactivo
--define(MONITOR_CHECK_INTERVAL, 30000). % Verificar cada 30 segundos
+-define(ID_REQUEST_TIMEOUT, 10000).
+-define(HELLO_INTERVAL, 5000).
+-define(NODE_TIMEOUT, 40000).
+-define(NODE_TIMEOUT_SECONDS, 40).      % 40 segundos sin HELLO = inactivo
 -define(SEARCH_TIMEOUT, 10000).         % 10 segundos para búsqueda
 -define(DOWNLOAD_TIMEOUT, 30000).       % 30 segundos para descarga
 -define(CHUNK_TIMEOUT, 30000).          % 30 segundos por chunk

@@ -1,20 +1,15 @@
-% Registro de nodos conocidos
 -module(node_registry).
 -export([start/0, stop/0, add_node/3, get_all_nodes/0]).
 
-% Info de cada nodo: id, ip y puerto
--record(node_info, {
-    id,
-    ip,
-    port
-}).
+-record(node_info, {id, ip, port}).
 
-% Levanta el proceso del registro
+% Levanta el registro de nodos
 start() ->
     Pid = spawn(fun() -> init() end),
     register(node_registry, Pid),
     ok.
 
+% Detiene el registro
 stop() ->
     case whereis(node_registry) of
         undefined -> ok;
@@ -24,7 +19,7 @@ stop() ->
             ok
     end.
 
-% Agrega un nodo al registro
+% Agrega o actualiza un nodo
 add_node(NodeId, Ip, Port) ->
     node_registry ! {add_node, NodeId, Ip, Port},
     ok.
@@ -38,12 +33,12 @@ get_all_nodes() ->
         []
     end.
 
-% Arranca con el mapa de nodos vacío
+% Inicializa el loop con mapa vacío
 init() ->
     io:format("Registro de nodos iniciado~n"),
     loop(#{}).
 
-% Loop principal que mantiene el estado
+% Loop principal del registro
 loop(Nodes) ->
     receive
         {add_node, NodeId, Ip, Port} ->
@@ -52,14 +47,15 @@ loop(Nodes) ->
                 ip = Ip,
                 port = Port
             },
-            % Guardamos o actualizamos el nodo en el mapa
             NewNodes = maps:put(NodeId, NodeInfo, Nodes),
-            io:format("Nodo agregado: ~s~n", [NodeId]),
+            io:format("Nodo agregado/actualizado: ~s (~p:~p)~n", [NodeId, Ip, Port]),
             loop(NewNodes);
         
         {get_all_nodes, From} ->
-            % Convertimos el mapa a lista de records
-            NodeList = maps:values(Nodes),
+            NodeList = [{Info#node_info.id, 
+                         Info#node_info.ip, 
+                         Info#node_info.port} 
+                        || Info <- maps:values(Nodes)],
             From ! {all_nodes, NodeList},
             loop(Nodes);
         
