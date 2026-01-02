@@ -1,7 +1,33 @@
 % Módulo de descubrimiento y consenso de ID único
 -module(discovery).
 -include("config.hrl").
--export([start/2, stop/0, get_node_id/0]).
+-export([start/2, stop/0, get_node_id/0, request_node_id/0]).
+
+request_node_id() ->
+    UdpPort = ?UDP_PORT,
+    % Abrimos el socket UDP para broadcasts
+    case gen_udp:open(UdpPort, [binary, 
+                                 {broadcast, true}, 
+                                 {reuseaddr, true}, 
+                                 {active, true}]) of
+        {ok, Socket} ->
+            % Generamos un ID aleatorio
+            NodeId = generate_random_id(4),
+            
+            % Pedimos consenso a la red
+            case request_node_id_internal(Socket, UdpPort, NodeId) of
+                {ok, FinalId} ->
+                    gen_udp:close(Socket),
+                    {ok, FinalId};
+                {error, Reason} ->
+                    gen_udp:close(Socket),
+                    {error, Reason}
+            end;
+        {error, Reason} ->
+            io:format("Error al abrir socket UDP: ~p. Reintentando...~n", [Reason]),
+            timer:sleep(1000),
+            request_node_id()
+    end.
 
 % Inicia el proceso de descubrimiento
 % UdpPort: puerto para escuchar broadcasts def macro 
@@ -17,7 +43,7 @@ start(UdpPort, TcpPort) ->
     NodeId = generate_random_id(4),
     
     % Pedimos consenso a la red
-    case request_node_id(Socket, UdpPort, NodeId) of
+    case request_node_id_internal(Socket, UdpPort, NodeId) of
         ok ->
             Pid = spawn(fun() -> loop(Socket, NodeId, TcpPort) end),
             register(discovery, Pid),
@@ -57,7 +83,7 @@ generate_random_id(N) ->
     end, lists:seq(1, N)).
 
 % Solicita un ID a la red usando consenso
-request_node_id(Socket, UdpPort, NodeId) ->
+request_node_id_internal(Socket, UdpPort, NodeId) ->
     % Enviamos NAME_REQUEST con nuestro ID propuesto
     Msg = io_lib:format("NAME_REQUEST ~s\n", [NodeId]),
     gen_udp:send(Socket, {255, 255, 255, 255}, UdpPort, Msg),
@@ -67,7 +93,13 @@ request_node_id(Socket, UdpPort, NodeId) ->
     % Calculamos el deadline una sola vez acá
     % Bug arreglado: antes hacíamos receive recursivo que reiniciaba el timeout
     % cada vez que llegaba un mensaje (incluso nuestro propio broadcast)
-    wait_for_rejection(Socket, NodeId, UdpPort, erlang:monotonic_time(millisecond) + 10000).
+    case wait_for_rejection(Socket, NodeId, UdpPort, erlang:monotonic_time(millisecond) + 10000) of
+        ok ->
+            io:format("ID consensuado: ~s~n", [NodeId]),
+            {ok, NodeId};
+        {ok, NewNodeId} ->
+            {ok, NewNodeId}
+    end.
 
 % Espera por rechazos sin reiniciar el timeout
 % Esta función maneja mensajes pero mantiene el deadline original
@@ -87,7 +119,7 @@ wait_for_rejection(Socket, NodeId, UdpPort, Deadline) ->
                             io:format("ID ~s ya existe, reintentando...~n", [NodeId]),
                             timer:sleep(rand:uniform(2000) + 1000),
                             NewId = generate_random_id(4),
-                            request_node_id(Socket, UdpPort, NewId);
+                            request_node_id_internal(Socket, UdpPort, NewId);
                         _ ->
                             % Es otro mensaje (ej: nuestro propio broadcast o de otro nodo)
                             % Lo ignoramos y seguimos esperando con el MISMO deadline
