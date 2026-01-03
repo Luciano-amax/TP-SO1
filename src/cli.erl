@@ -59,6 +59,20 @@ process_command("listar_mis_archivos") ->
             io:format("~nTotal: ~p archivo(s)~n", [length(Files)])
     end;
 
+% Comando nodos - Lista nodos conocidos en la red
+process_command("getNodes") ->
+    Nodes = node_registry:get_all_nodes(),
+    io:format("~n=== Nodos Conocidos ===~n"),
+    case Nodes of
+        [] ->
+            io:format("No hay nodos conocidos~n");
+        _ ->
+            lists:foreach(fun({NodeId, Ip, Port}) ->
+                io:format("  • ~s (~p:~w)~n", [NodeId, Ip, Port])
+            end, Nodes),
+            io:format("~nTotal: ~p nodo(s)~n", [length(Nodes)])
+    end;
+
 % Comando buscar - Busca archivos en todos los nodos de la red
 % quiza es demasiado rustico (revisar forma de flexibilizacion)
 process_command("buscar " ++ Pattern) ->
@@ -84,6 +98,7 @@ print_help() ->
     io:format("~nComandos disponibles:~n"),
     io:format("  id_nodo              - Muestra el ID único del nodo~n"),
     io:format("  listar_mis_archivos  - Lista los archivos compartidos~n"),
+    io:format("  getNodes                - Lista los nodos conocidos en la red~n"),
     io:format("  buscar <patron>      - Busca archivos en la red~n"),
     io:format("  salir                - Cierra el nodo P2P~n"),
     io:format("  ayuda                - Muestra esta ayuda~n~n").
