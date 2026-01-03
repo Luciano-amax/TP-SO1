@@ -1,7 +1,7 @@
 -module(file_manager).
 -include("config.hrl").
 -include_lib("kernel/include/file.hrl").
--export([start/0, stop/0, get_shared_files/0, search_files/1]).
+-export([start/0, stop/0, get_shared_files/0, search_files/1, get_file/1]).
 
 % Arranca el proceso que maneja los archivos
 start() ->
@@ -54,6 +54,22 @@ loop(Files) ->
             loop(Files);
         stop ->
             ok
+    end.
+
+% Lee un archivo de la carpeta compartida y devuelve su contenido
+get_file(FileName) ->
+    FilePath = filename:join(?SHARED_DIR, FileName),
+    case filelib:is_regular(FilePath) of
+        true ->
+            case file:read_file(FilePath) of
+                {ok, Data} ->
+                    Size = byte_size(Data),
+                    {ok, Data, Size};
+                {error, _Reason} ->
+                    {error, not_found}
+            end;
+        false ->
+            {error, not_found}
     end.
 
 % Escanea el directorio y arma la lista de archivos

@@ -12,7 +12,7 @@
 
 %% Timeouts y intervalos
 -define(ID_REQUEST_TIMEOUT, 10000).
--define(HELLO_INTERVAL, 5000).
+-define(HELLO_INTERVAL, 15000).
 -define(NODE_TIMEOUT, 40000).
 -define(NODE_TIMEOUT_SECONDS, 40).      % 40 segundos sin HELLO = inactivo
 -define(SEARCH_TIMEOUT, 10000).         % 10 segundos para búsqueda

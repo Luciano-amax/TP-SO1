@@ -1,5 +1,5 @@
 -module(node_registry).
--export([start/0, stop/0, add_node/3, get_all_nodes/0]).
+-export([start/0, stop/0, add_node/3, get_all_nodes/0, get_node/1]).
 
 -record(node_info, {id, ip, port}).
 
@@ -33,6 +33,16 @@ get_all_nodes() ->
         []
     end.
 
+% Obtiene un nodo específico por ID
+get_node(NodeId) ->
+    node_registry ! {get_node, NodeId, self()},
+    receive
+        {node_found, NodeInfo} -> {ok, NodeInfo};
+        {node_not_found} -> {error, not_found}
+    after 5000 ->
+        {error, timeout}
+    end.
+
 % Inicializa el loop con mapa vacío
 init() ->
     io:format("Registro de nodos iniciado~n"),
@@ -57,6 +67,18 @@ loop(Nodes) ->
                          Info#node_info.port} 
                         || Info <- maps:values(Nodes)],
             From ! {all_nodes, NodeList},
+            loop(Nodes);
+        
+        {get_node, NodeId, From} ->
+            case maps:find(NodeId, Nodes) of
+                {ok, Info} ->
+                    NodeData = {Info#node_info.id, 
+                                Info#node_info.ip, 
+                                Info#node_info.port},
+                    From ! {node_found, NodeData};
+                error ->
+                    From ! {node_not_found}
+            end,
             loop(Nodes);
         
         stop ->

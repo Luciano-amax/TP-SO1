@@ -52,23 +52,41 @@ accept_loop(ListenSocket) ->
 handle_client(Socket) ->
     case gen_tcp:recv(Socket, 0, 30000) of
         {ok, Data} ->
-            process_request(Socket, binary_to_list(Data)),
-            gen_tcp:close(Socket);
+            RequestStr = binary_to_list(Data),
+            IsDownload = is_download_request(RequestStr),
+            process_request(Socket, RequestStr, IsDownload),
+            case IsDownload of
+                false -> gen_tcp:close(Socket);
+                true -> ok  % El socket se cierra despues de enviar el archivo
+            end;
         {error, _Reason} ->
             gen_tcp:close(Socket)
     end.
 
+% Verifica si es un request de descarga
+is_download_request(RequestStr) ->
+    Msg = string:trim(RequestStr),
+    case string:tokens(Msg, " ") of
+        ["DOWNLOAD_REQUEST" | _] -> true;
+        _ -> false
+    end.
+
 % Procesa el request del cliente
-process_request(Socket, RequestStr) ->
+process_request(Socket, RequestStr, IsDownload) ->
     Msg = string:trim(RequestStr),
     Tokens = string:tokens(Msg, " "),
     
     case Tokens of
         ["SEARCH_REQUEST", _NodeId, Pattern] ->
             handle_search_request(Socket, Pattern);
+        ["DOWNLOAD_REQUEST", FileName] ->
+            handle_download_request(Socket, FileName);
         _ ->
             io:format("Request no reconocido: ~s~n", [Msg]),
-            gen_tcp:send(Socket, "ERROR\n")
+            case IsDownload of
+                false -> gen_tcp:send(Socket, "ERROR\n");
+                true -> ok
+            end
     end.
 
 % Maneja búsqueda de archivos
@@ -80,6 +98,53 @@ handle_search_request(Socket, Pattern) ->
         Response = io_lib:format("SEARCH_RESPONSE ~s ~s ~p~n", [MyNodeId, FileName, Size]),
         gen_tcp:send(Socket, Response)
     end, Files).
+
+% Maneja descarga de archivos
+handle_download_request(Socket, FileName) ->
+    case file_manager:get_file(FileName) of
+        {ok, Data, Size} ->
+            send_file(Socket, Data, Size);
+        {error, not_found} ->
+            gen_tcp:send(Socket, <<112>>)
+    end,
+    gen_tcp:close(Socket).
+
+% Envia archivo por el socket (con chunks si es muy grande)
+send_file(Socket, Data, Size) ->
+    MB = 1024 * 1024,
+    Code = <<101>>,
+    SizeBin = <<Size:32/integer-big>>,
+    
+    if
+        Size >= (MB * 4) ->
+            % Archivo grande, enviar en chunks
+            Msg = <<Code/binary, SizeBin/binary, MB:32/integer-big>>,
+            gen_tcp:send(Socket, Msg),
+            send_chunks(Socket, Data, 0);
+        true ->
+            % Archivo pequeño, enviar todo de una vez
+            Msg = <<Code/binary, SizeBin/binary, Data/binary>>,
+            gen_tcp:send(Socket, Msg)
+    end.
+
+% Envia archivo en chunks de 1MB
+send_chunks(Socket, Data, ChunkIndex) ->
+    ChunkSize = 1024 * 1024,
+    DataSize = byte_size(Data),
+    
+    if
+        DataSize >= ChunkSize ->
+            <<Chunk:ChunkSize/binary, Rest/binary>> = Data,
+            Msg = <<111, ChunkIndex:16/integer-big, ChunkSize:32/integer-big, Chunk/binary>>,
+            gen_tcp:send(Socket, Msg),
+            send_chunks(Socket, Rest, ChunkIndex + 1);
+        DataSize > 0 ->
+            % Ultimo chunk (menor a 1MB)
+            Msg = <<111, ChunkIndex:16/integer-big, DataSize:32/integer-big, Data/binary>>,
+            gen_tcp:send(Socket, Msg);
+        true ->
+            ok
+    end.
 
 % Obtiene el NodeId del proceso p2p_node
 get_node_id() ->

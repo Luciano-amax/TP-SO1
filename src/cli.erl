@@ -78,6 +78,18 @@ process_command("getNodes") ->
 process_command("buscar " ++ Pattern) ->
     search:search_all_nodes(Pattern);
 
+% Comando descargar - Descarga un archivo desde un nodo específico
+process_command("descargar " ++ Rest) ->
+    Parts = string:tokens(Rest, " "),
+    case length(Parts) of
+        2 ->
+            FileName = lists:nth(1, Parts),
+            NodeId = lists:nth(2, Parts),
+            download:download_from_node(FileName, NodeId);
+        _ ->
+            io:format("Uso: descargar <nombre_archivo> <nodo_id>~n")
+    end;
+
 % §3.1.5: Comando salir - Cierra el nodo
 process_command("salir") ->
     io:format("~nCerrando el nodo...~n"),
@@ -100,5 +112,6 @@ print_help() ->
     io:format("  listar_mis_archivos  - Lista los archivos compartidos~n"),
     io:format("  getNodes                - Lista los nodos conocidos en la red~n"),
     io:format("  buscar <patron>      - Busca archivos en la red~n"),
+    io:format("  descargar <archivo> <nodo> - Descarga un archivo de un nodo~n"),
     io:format("  salir                - Cierra el nodo P2P~n"),
     io:format("  ayuda                - Muestra esta ayuda~n~n").
