@@ -59,6 +59,11 @@ process_command("listar_mis_archivos") ->
             io:format("~nTotal: ~p archivo(s)~n", [length(Files)])
     end;
 
+% Comando buscar - Busca archivos en todos los nodos de la red
+% quiza es demasiado rustico (revisar forma de flexibilizacion)
+process_command("buscar " ++ Pattern) ->
+    search:search_all_nodes(Pattern);
+
 % §3.1.5: Comando salir - Cierra el nodo
 process_command("salir") ->
     io:format("~nCerrando el nodo...~n"),
@@ -79,5 +84,6 @@ print_help() ->
     io:format("~nComandos disponibles:~n"),
     io:format("  id_nodo              - Muestra el ID único del nodo~n"),
     io:format("  listar_mis_archivos  - Lista los archivos compartidos~n"),
+    io:format("  buscar <patron>      - Busca archivos en la red~n"),
     io:format("  salir                - Cierra el nodo P2P~n"),
     io:format("  ayuda                - Muestra esta ayuda~n~n").

@@ -1,8 +1,7 @@
-% Gestor de archivos compartidos
 -module(file_manager).
 -include("config.hrl").
 -include_lib("kernel/include/file.hrl").
--export([start/0, stop/0, get_shared_files/0]).
+-export([start/0, stop/0, get_shared_files/0, search_files/1]).
 
 % Arranca el proceso que maneja los archivos
 start() ->
@@ -27,6 +26,20 @@ get_shared_files() ->
     after 5000 ->
         []
     end.
+
+% Busca archivos que coincidan con el patron (soporta wildcards)
+search_files(Pattern) ->
+    Files = filelib:wildcard(Pattern, ?SHARED_DIR),
+    lists:filtermap(fun(FileName) ->
+        FilePath = filename:join(?SHARED_DIR, FileName),
+        case filelib:is_regular(FilePath) of
+            true ->
+                Size = filelib:file_size(FilePath),
+                {true, {FileName, Size}};
+            false ->
+                false
+        end
+    end, Files).
 
 % Inicializa escaneando la carpeta compartida
 init() ->

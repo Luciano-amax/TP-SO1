@@ -50,18 +50,48 @@ accept_loop(ListenSocket) ->
 
 % Maneja la comunicación con un cliente conectado
 handle_client(Socket) ->
-    % Esperamos recibir datos (timeout 30 segundos)
     case gen_tcp:recv(Socket, 0, 30000) of
         {ok, Data} ->
-            % Por ahora solo procesamos y respondemos
-            Response = process_request(binary_to_list(Data)),
-            gen_tcp:send(Socket, Response),
+            process_request(Socket, binary_to_list(Data)),
             gen_tcp:close(Socket);
         {error, _Reason} ->
             gen_tcp:close(Socket)
     end.
 
 % Procesa el request del cliente
-process_request(RequestStr) ->
-    io:format("Request recibido: ~s", [RequestStr]),
-    "OK\n".
+process_request(Socket, RequestStr) ->
+    Msg = string:trim(RequestStr),
+    Tokens = string:tokens(Msg, " "),
+    
+    case Tokens of
+        ["SEARCH_REQUEST", _NodeId, Pattern] ->
+            handle_search_request(Socket, Pattern);
+        _ ->
+            io:format("Request no reconocido: ~s~n", [Msg]),
+            gen_tcp:send(Socket, "ERROR\n")
+    end.
+
+% Maneja búsqueda de archivos
+handle_search_request(Socket, Pattern) ->
+    {ok, MyNodeId} = get_node_id(),
+    Files = file_manager:search_files(Pattern),
+    
+    lists:foreach(fun({FileName, Size}) ->
+        Response = io_lib:format("SEARCH_RESPONSE ~s ~s ~p~n", [MyNodeId, FileName, Size]),
+        gen_tcp:send(Socket, Response)
+    end, Files).
+
+% Obtiene el NodeId del proceso p2p_node
+get_node_id() ->
+    case whereis(p2p_node) of
+        undefined -> {ok, "unknown"};
+        Pid ->
+            case process_info(Pid, dictionary) of
+                {dictionary, Dict} ->
+                    case proplists:get_value(node_id, Dict) of
+                        undefined -> {ok, "unknown"};
+                        NodeId -> {ok, NodeId}
+                    end;
+                _ -> {ok, "unknown"}
+            end
+    end.
