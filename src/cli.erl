@@ -1,14 +1,13 @@
-% Interfaz de línea de comandos para interactuar con el nodo
+% Interfaz de linea de comandos
 -module(cli).
 -export([start/0]).
 
-% Arranca la CLI y muestra el menú
 start() ->
     io:format("~n=== Sistema P2P ===~n"),
     print_help(),
     command_loop().
 
-% Loop principal que lee y procesa comandos
+% Loop principal de lectura de comandos
 command_loop() ->
     Line = io:get_line("p2p> "),
     case Line of
@@ -78,18 +77,20 @@ process_command("getNodes") ->
 process_command("buscar " ++ Pattern) ->
     search:search_all_nodes(Pattern);
 
-% Comando descargar - Descarga un archivo desde un nodo específico
+% Comando descargar - Descarga un archivo desde un nodo específico (concurrente)
 process_command("descargar " ++ Rest) ->
     Parts = string:tokens(Rest, " "),
     case length(Parts) of
         2 ->
             FileName = lists:nth(1, Parts),
             NodeId = lists:nth(2, Parts),
-            download:download_from_node(FileName, NodeId);
+            spawn(fun() -> download:download_from_node(FileName, NodeId) end),
+            io:format("Descarga iniciada en segundo plano...~n");
         _ ->
             io:format("Uso: descargar <nombre_archivo> <nodo_id>~n")
     end;
 
+% Comando salir - Cierra el Nodo
 % §3.1.5: Comando salir - Cierra el nodo
 process_command("salir") ->
     io:format("~nCerrando el nodo...~n"),

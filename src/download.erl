@@ -16,12 +16,27 @@ download_from_node(FileName, NodeId) ->
 connect_and_download(Ip, Port, FileName) ->
     case gen_tcp:connect(Ip, Port, [binary, {active, false}, {reuseaddr, true}], 5000) of
         {ok, Socket} ->
+            % Monitoreamos el socket para detectar desconexiones
             Request = io_lib:format("DOWNLOAD_REQUEST ~s~n", [FileName]),
-            gen_tcp:send(Socket, Request),
-            receive_file(Socket, FileName),
-            gen_tcp:close(Socket);
+            case gen_tcp:send(Socket, Request) of
+                ok ->
+                    Result = receive_file(Socket, FileName),
+                    gen_tcp:close(Socket),
+                    Result;
+                {error, SendReason} ->
+                    gen_tcp:close(Socket),
+                    io:format("Error al enviar request: ~p (nodo desconectado?)~n", [SendReason]),
+                    {error, send_failed}
+            end;
+        {error, econnrefused} ->
+            io:format("Error: No se pudo conectar al nodo (servidor no disponible)~n"),
+            {error, connection_refused};
+        {error, timeout} ->
+            io:format("Error: Timeout al conectar al nodo~n"),
+            {error, connection_timeout};
         {error, Reason} ->
-            io:format("Error de conexion: ~p~n", [Reason])
+            io:format("Error de conexion: ~p~n", [Reason]),
+            {error, Reason}
     end.
 
 % Recibe el archivo del servidor
@@ -37,27 +52,50 @@ receive_file(Socket, FileName) ->
                     if
                         Size > (MB * 4) ->
                             % Archivo grande, recibir en chunks
-                            {ok, <<_ChunkSize:32/integer-big>>} = gen_tcp:recv(Socket, 4, 5000),
-                            receive_chunks(Socket, FileName);
+                            case gen_tcp:recv(Socket, 4, 5000) of
+                                {ok, <<_ChunkSize:32/integer-big>>} ->
+                                    receive_chunks(Socket, FileName);
+                                {error, ChunkReason} ->
+                                    io:format("Error al recibir metadata de chunks: ~p (desconexion?)~n", [ChunkReason]),
+                                    {error, chunk_metadata_failed}
+                            end;
                         true ->
                             % Archivo pequeño, recibir todo de una vez
                             case gen_tcp:recv(Socket, Size, 30000) of
                                 {ok, Data} ->
                                     save_file(FileName, Data),
-                                    io:format("Descarga completada: ~s~n", [FileName]);
+                                    io:format("Descarga completada: ~s~n", [FileName]),
+                                    {ok, FileName};
+                                {error, closed} ->
+                                    io:format("Error: Conexion cerrada durante descarga~n"),
+                                    {error, connection_closed};
+                                {error, timeout} ->
+                                    io:format("Error: Timeout durante descarga~n"),
+                                    {error, download_timeout};
                                 {error, Reason} ->
-                                    io:format("Error al recibir archivo: ~p~n", [Reason])
+                                    io:format("Error al recibir archivo: ~p~n", [Reason]),
+                                    {error, Reason}
                             end
                     end;
+                {error, closed} ->
+                    io:format("Error: Conexion cerrada al recibir tamaño~n"),
+                    {error, connection_closed};
                 {error, Reason} ->
-                    io:format("Error al recibir tamaño: ~p~n", [Reason])
+                    io:format("Error al recibir tamaño: ~p~n", [Reason]),
+                    {error, Reason}
             end;
         {ok, <<112>>} ->
-            io:format("Error: Archivo no disponible en el nodo remoto~n");
+            io:format("Error: Archivo no disponible en el nodo remoto~n"),
+            {error, file_not_found};
         {ok, Other} ->
-            io:format("Respuesta incorrecta del servidor: ~p~n", [Other]);
+            io:format("Respuesta incorrecta del servidor: ~p~n", [Other]),
+            {error, invalid_response};
+        {error, closed} ->
+            io:format("Error: Conexion cerrada antes de recibir respuesta~n"),
+            {error, connection_closed};
         {error, Reason} ->
-            io:format("Error al recibir respuesta: ~p~n", [Reason])
+            io:format("Error al recibir respuesta: ~p~n", [Reason]),
+            {error, Reason}
     end.
 
 % Recibe archivo en chunks
@@ -79,21 +117,47 @@ receive_chunks_loop(Socket, FilePath) ->
                                 {ok, ChunkData} ->
                                     file:write_file(FilePath, ChunkData, [append]),
                                     receive_chunks_loop(Socket, FilePath);
-                                {error, _Reason} ->
-                                    io:format("Descarga completada: ~s~n", [filename:basename(FilePath)])
+                                {error, closed} ->
+                                    io:format("Advertencia: Conexion cerrada durante recepcion de chunk~n"),
+                                    io:format("Descarga parcial guardada: ~s~n", [filename:basename(FilePath)]),
+                                    {error, connection_closed_during_chunk};
+                                {error, timeout} ->
+                                    io:format("Error: Timeout durante recepcion de chunk~n"),
+                                    io:format("Descarga parcial guardada: ~s~n", [filename:basename(FilePath)]),
+                                    {error, chunk_timeout};
+                                {error, Reason} ->
+                                    io:format("Error durante chunk: ~p~n", [Reason]),
+                                    {error, Reason}
                             end;
-                        {error, _} ->
-                            io:format("Descarga completada: ~s~n", [filename:basename(FilePath)])
+                        {error, closed} ->
+                            io:format("Descarga completada: ~s~n", [filename:basename(FilePath)]),
+                            {ok, FilePath};
+                        {error, timeout} ->
+                            io:format("Descarga completada: ~s~n", [filename:basename(FilePath)]),
+                            {ok, FilePath};
+                        {error, Reason} ->
+                            io:format("Error al recibir tamaño de chunk: ~p~n", [Reason]),
+                            {error, Reason}
                     end;
-                {error, _} ->
-                    io:format("Descarga completada: ~s~n", [filename:basename(FilePath)])
+                {error, closed} ->
+                    io:format("Descarga completada: ~s~n", [filename:basename(FilePath)]),
+                    {ok, FilePath};
+                {error, Reason} ->
+                    io:format("Error al recibir indice de chunk: ~p~n", [Reason]),
+                    {error, Reason}
             end;
         {ok, _Other} ->
-            io:format("Error en formato de chunk~n");
+            io:format("Error en formato de chunk~n"),
+            {error, invalid_chunk_format};
         {error, timeout} ->
-            io:format("Descarga completada: ~s~n", [filename:basename(FilePath)]);
-        {error, _Reason} ->
-            io:format("Descarga completada: ~s~n", [filename:basename(FilePath)])
+            io:format("Descarga completada: ~s~n", [filename:basename(FilePath)]),
+            {ok, FilePath};
+        {error, closed} ->
+            io:format("Descarga completada: ~s~n", [filename:basename(FilePath)]),
+            {ok, FilePath};
+        {error, Reason} ->
+            io:format("Error durante transferencia: ~p~n", [Reason]),
+            {error, Reason}
     end.
 
 % Guarda el archivo en el directorio de descargas

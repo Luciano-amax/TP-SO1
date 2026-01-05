@@ -37,15 +37,38 @@ accept_loop(ListenSocket) ->
     case gen_tcp:accept(ListenSocket) of
         {ok, Socket} ->
             % Obtenemos info del cliente que se conectó
-            {ok, {Address, Port}} = inet:peername(Socket),
-            io:format("Nueva conexión desde ~p:~p~n", [Address, Port]),
+            case inet:peername(Socket) of
+                {ok, {Address, Port}} ->
+                    io:format("Nueva conexión desde ~p:~p~n", [Address, Port]);
+                {error, _} ->
+                    ok
+            end,
             
             % Creamos un proceso nuevo para esta conexión (concurrencia)
-            spawn(fun() -> handle_client(Socket) end),
+            % Usamos spawn_link para detectar si el handler crashea
+            spawn_link(fun() -> 
+                handle_client_safe(Socket)
+            end),
             % Seguimos aceptando más conexiones
             accept_loop(ListenSocket);
         {error, closed} ->
-            ok
+            ok;
+        {error, Reason} ->
+            io:format("Error en accept: ~p~n", [Reason]),
+            accept_loop(ListenSocket)
+    end.
+
+% Wrapper con manejo de excepciones para handle_client
+handle_client_safe(Socket) ->
+    try
+        handle_client(Socket)
+    catch
+        error:Reason:Stacktrace ->
+            io:format("Error en handler de cliente: ~p~n~p~n", [Reason, Stacktrace]),
+            gen_tcp:close(Socket);
+        exit:Reason ->
+            io:format("Handler de cliente termino: ~p~n", [Reason]),
+            gen_tcp:close(Socket)
     end.
 
 % Maneja la comunicación con un cliente conectado
@@ -59,7 +82,14 @@ handle_client(Socket) ->
                 false -> gen_tcp:close(Socket);
                 true -> ok  % El socket se cierra despues de enviar el archivo
             end;
-        {error, _Reason} ->
+        {error, closed} ->
+            % Cliente cerró la conexión, esto es normal
+            gen_tcp:close(Socket);
+        {error, timeout} ->
+            io:format("Timeout esperando datos del cliente~n"),
+            gen_tcp:close(Socket);
+        {error, Reason} ->
+            io:format("Error al recibir datos: ~p~n", [Reason]),
             gen_tcp:close(Socket)
     end.
 
@@ -103,9 +133,15 @@ handle_search_request(Socket, Pattern) ->
 handle_download_request(Socket, FileName) ->
     case file_manager:get_file(FileName) of
         {ok, Data, Size} ->
-            send_file(Socket, Data, Size);
+            case send_file(Socket, Data, Size) of
+                ok ->
+                    io:format("Archivo enviado exitosamente: ~s (~p bytes)~n", [FileName, Size]);
+                {error, Reason} ->
+                    io:format("Error al enviar archivo ~s: ~p~n", [FileName, Reason])
+            end;
         {error, not_found} ->
-            gen_tcp:send(Socket, <<112>>)
+            gen_tcp:send(Socket, <<112>>),
+            io:format("Archivo no encontrado: ~s~n", [FileName])
     end,
     gen_tcp:close(Socket).
 
@@ -119,12 +155,20 @@ send_file(Socket, Data, Size) ->
         Size >= (MB * 4) ->
             % Archivo grande, enviar en chunks
             Msg = <<Code/binary, SizeBin/binary, MB:32/integer-big>>,
-            gen_tcp:send(Socket, Msg),
-            send_chunks(Socket, Data, 0);
+            case gen_tcp:send(Socket, Msg) of
+                ok -> 
+                    send_chunks(Socket, Data, 0);
+                {error, Reason} ->
+                    {error, Reason}
+            end;
         true ->
             % Archivo pequeño, enviar todo de una vez
             Msg = <<Code/binary, SizeBin/binary, Data/binary>>,
-            gen_tcp:send(Socket, Msg)
+            case gen_tcp:send(Socket, Msg) of
+                ok -> ok;
+                {error, Reason} ->
+                    {error, Reason}
+            end
     end.
 
 % Envia archivo en chunks de 1MB
@@ -136,12 +180,20 @@ send_chunks(Socket, Data, ChunkIndex) ->
         DataSize >= ChunkSize ->
             <<Chunk:ChunkSize/binary, Rest/binary>> = Data,
             Msg = <<111, ChunkIndex:16/integer-big, ChunkSize:32/integer-big, Chunk/binary>>,
-            gen_tcp:send(Socket, Msg),
-            send_chunks(Socket, Rest, ChunkIndex + 1);
+            case gen_tcp:send(Socket, Msg) of
+                ok ->
+                    send_chunks(Socket, Rest, ChunkIndex + 1);
+                {error, Reason} ->
+                    {error, Reason}
+            end;
         DataSize > 0 ->
             % Ultimo chunk (menor a 1MB)
             Msg = <<111, ChunkIndex:16/integer-big, DataSize:32/integer-big, Data/binary>>,
-            gen_tcp:send(Socket, Msg);
+            case gen_tcp:send(Socket, Msg) of
+                ok -> ok;
+                {error, Reason} ->
+                    {error, Reason}
+            end;
         true ->
             ok
     end.
