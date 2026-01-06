@@ -16,7 +16,8 @@
 -define(HELLO_INTERVAL_MAX, 20000).     % 20 segundos
 -define(NODE_TIMEOUT, 45000).           % 45 segundos sin HELLO = inactivo
 -define(NODE_TIMEOUT_SECONDS, 45).
--define(SEARCH_TIMEOUT, 10000).         % 10 segundos para búsqueda
+-define(CLEANUP_INTERVAL, 30000).       % 30 segundos entre limpiezas
+-define(SEARCH_TIMEOUT, 10000).         % 10 segundos para busqueda
 -define(DOWNLOAD_TIMEOUT, 30000).       % 30 segundos para descarga
 -define(CHUNK_TIMEOUT, 30000).          % 30 segundos por chunk
 
