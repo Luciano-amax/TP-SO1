@@ -29,7 +29,10 @@ stop() ->
 % Loop que envía HELLO y procesa recepción
 hello_loop(Socket, HelloMsg, MyNodeId) ->
     gen_udp:send(Socket, {255, 255, 255, 255}, ?UDP_PORT, HelloMsg),
-    timer:sleep(?HELLO_INTERVAL),
+    
+    % Intervalo aleatorio entre 15-20 segundos
+    Interval = ?HELLO_INTERVAL_MIN + rand:uniform(?HELLO_INTERVAL_MAX - ?HELLO_INTERVAL_MIN),
+    timer:sleep(Interval),
     
     flush_messages(Socket, MyNodeId),
     

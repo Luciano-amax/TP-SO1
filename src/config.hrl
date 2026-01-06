@@ -12,9 +12,10 @@
 
 %% Timeouts y intervalos
 -define(ID_REQUEST_TIMEOUT, 10000).
--define(HELLO_INTERVAL, 15000).
--define(NODE_TIMEOUT, 40000).
--define(NODE_TIMEOUT_SECONDS, 40).      % 40 segundos sin HELLO = inactivo
+-define(HELLO_INTERVAL_MIN, 15000).     % 15 segundos
+-define(HELLO_INTERVAL_MAX, 20000).     % 20 segundos
+-define(NODE_TIMEOUT, 45000).           % 45 segundos sin HELLO = inactivo
+-define(NODE_TIMEOUT_SECONDS, 45).
 -define(SEARCH_TIMEOUT, 10000).         % 10 segundos para búsqueda
 -define(DOWNLOAD_TIMEOUT, 30000).       % 30 segundos para descarga
 -define(CHUNK_TIMEOUT, 30000).          % 30 segundos por chunk

@@ -44,11 +44,13 @@ start(UdpPort, TcpPort) ->
     
     % Pedimos consenso a la red
     case request_node_id_internal(Socket, UdpPort, NodeId) of
-        ok ->
-            Pid = spawn(fun() -> loop(Socket, NodeId, TcpPort) end),
+        {ok, FinalId} ->
+            % Guardamos los IDs que solicitamos durante el consenso
+            RequestedIds = sets:from_list([FinalId]),
+            Pid = spawn(fun() -> loop(Socket, FinalId, TcpPort, RequestedIds) end),
             register(discovery, Pid),
-            io:format("ID consensuado: ~s~n", [NodeId]),
-            {ok, NodeId};
+            io:format("ID consensuado: ~s~n", [FinalId]),
+            {ok, FinalId};
         {error, Reason} ->
             gen_udp:close(Socket),
             {error, Reason}
@@ -84,16 +86,23 @@ generate_random_id(N) ->
 
 % Solicita un ID a la red usando consenso
 request_node_id_internal(Socket, UdpPort, NodeId) ->
+    request_node_id_internal(Socket, UdpPort, NodeId, sets:new()).
+
+% Version con acumulador de IDs solicitados
+request_node_id_internal(Socket, UdpPort, NodeId, RequestedIds) ->
     % Enviamos NAME_REQUEST con nuestro ID propuesto
     Msg = io_lib:format("NAME_REQUEST ~s\n", [NodeId]),
     gen_udp:send(Socket, {255, 255, 255, 255}, UdpPort, Msg),
     
     io:format("Solicitando ID: ~s~n", [NodeId]),
     
-    % Calculamos el deadline una sola vez acá
-    % Bug arreglado: antes hacíamos receive recursivo que reiniciaba el timeout
+    % Agregamos este ID al conjunto de IDs solicitados
+    NewRequestedIds = sets:add_element(NodeId, RequestedIds),
+    
+    % Calculamos el deadline una sola vez aca
+    % Bug arreglado: antes haciamos receive recursivo que reiniciaba el timeout
     % cada vez que llegaba un mensaje (incluso nuestro propio broadcast)
-    case wait_for_rejection(Socket, NodeId, UdpPort, erlang:monotonic_time(millisecond) + 10000) of
+    case wait_for_rejection(Socket, NodeId, UdpPort, erlang:monotonic_time(millisecond) + 10000, NewRequestedIds) of
         ok ->
             io:format("ID consensuado: ~s~n", [NodeId]),
             {ok, NodeId};
@@ -103,7 +112,7 @@ request_node_id_internal(Socket, UdpPort, NodeId) ->
 
 % Espera por rechazos sin reiniciar el timeout
 % Esta función maneja mensajes pero mantiene el deadline original
-wait_for_rejection(Socket, NodeId, UdpPort, Deadline) ->
+wait_for_rejection(Socket, NodeId, UdpPort, Deadline, RequestedIds) ->
     % Calculamos cuánto tiempo nos queda hasta el deadline
     TimeLeft = Deadline - erlang:monotonic_time(millisecond),
     if 
@@ -117,13 +126,14 @@ wait_for_rejection(Socket, NodeId, UdpPort, Deadline) ->
                         {invalid_name, RecvId} when RecvId == NodeId ->
                             % Nos rechazaron, probamos con otro ID
                             io:format("ID ~s ya existe, reintentando...~n", [NodeId]),
-                            timer:sleep(rand:uniform(2000) + 1000),
+                            % Espera random entre 2-10 segundos
+                            timer:sleep(2000 + rand:uniform(8000)),
                             NewId = generate_random_id(4),
-                            request_node_id_internal(Socket, UdpPort, NewId);
+                            request_node_id_internal(Socket, UdpPort, NewId, RequestedIds);
                         _ ->
                             % Es otro mensaje (ej: nuestro propio broadcast o de otro nodo)
                             % Lo ignoramos y seguimos esperando con el MISMO deadline
-                            wait_for_rejection(Socket, NodeId, UdpPort, Deadline)
+                            wait_for_rejection(Socket, NodeId, UdpPort, Deadline, RequestedIds)
                     end
             after TimeLeft ->
                 % Timeout final alcanzado
@@ -132,15 +142,15 @@ wait_for_rejection(Socket, NodeId, UdpPort, Deadline) ->
     end.
 
 % Loop principal del proceso de descubrimiento
-loop(Socket, NodeId, TcpPort) ->
+loop(Socket, NodeId, TcpPort, RequestedIds) ->
     receive
         {udp, Socket, SrcIp, SrcPort, Data} ->
-            handle_message(Socket, SrcIp, SrcPort, binary_to_list(Data), NodeId),
-            loop(Socket, NodeId, TcpPort);
+            handle_message(Socket, SrcIp, SrcPort, binary_to_list(Data), NodeId, RequestedIds),
+            loop(Socket, NodeId, TcpPort, RequestedIds);
         
         {get_id, From} ->
             From ! {node_id, NodeId},
-            loop(Socket, NodeId, TcpPort);
+            loop(Socket, NodeId, TcpPort, RequestedIds);
         
         stop ->
             gen_udp:close(Socket),
@@ -148,14 +158,19 @@ loop(Socket, NodeId, TcpPort) ->
     end.
 
 % Maneja mensajes UDP recibidos
-handle_message(Socket, SrcIp, SrcPort, Message, MyNodeId) ->
+handle_message(Socket, SrcIp, SrcPort, Message, MyNodeId, RequestedIds) ->
     case parse_message(Message) of
         {name_request, RequestedId} ->
-            % Si alguien pide un ID que ya usamos, lo rechazamos
-            if RequestedId == MyNodeId ->
+            % Condicion 1: El ID solicitado coincide con nuestro ID actual
+            Condition1 = (RequestedId == MyNodeId),
+            % Condicion 2: El ID fue solicitado por nosotros anteriormente
+            Condition2 = sets:is_element(RequestedId, RequestedIds),
+            
+            % Si alguna condicion se cumple, rechazamos
+            if Condition1 orelse Condition2 ->
                 Reply = io_lib:format("INVALID_NAME ~s\n", [RequestedId]),
                 gen_udp:send(Socket, SrcIp, SrcPort, Reply),
-                io:format("ID ~s rechazado (ya en uso)~n", [RequestedId]);
+                io:format("ID ~s rechazado (ya en uso o solicitado)~n", [RequestedId]);
             true ->
                 ok
             end;
