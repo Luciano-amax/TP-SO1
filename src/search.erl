@@ -2,12 +2,11 @@
 -export([search_all_nodes/1]).
 -include("config.hrl").
 
-% Busca un patrón en todos los nodos conocidos
 search_all_nodes(Pattern) ->
     {ok, MyNodeId} = get_node_id(),
     Nodes = node_registry:get_all_nodes(),
     
-    io:format("~nBuscando '~s' en ~p nodo(s)...~n", [Pattern, length(Nodes)]),
+    io:format("~nBuscando '~s'...~n", [Pattern]),
     
     Parent = self(),
     lists:foreach(fun({NodeId, Ip, Port}) ->
@@ -54,7 +53,6 @@ parse_search_response(Line) ->
             false
     end.
 
-% Recolecta resultados de todos los nodos
 collect_results(0, Results) ->
     display_results(Results);
 collect_results(Remaining, Results) ->
@@ -65,16 +63,15 @@ collect_results(Remaining, Results) ->
         display_results(Results)
     end.
 
-% Muestra los resultados
 display_results([]) ->
-    io:format("~nNo se encontraron archivos.~n~n");
+    io:format("~nSin resultados.~n~n");
 display_results(Results) ->
-    io:format("~n=== Resultados de búsqueda ===~n"),
+    io:format("~nResultados:~n"),
     lists:foreach(fun({NodeId, FileName, Size}) ->
         SizeMB = Size / (1024 * 1024),
         io:format("  [~s] ~s (~.2f MB)~n", [NodeId, FileName, SizeMB])
     end, Results),
-    io:format("~nTotal: ~p archivo(s) encontrado(s)~n~n", [length(Results)]).
+    io:format("~n").
 
 % Obtiene el NodeId actual
 get_node_id() ->

@@ -3,11 +3,9 @@
 -export([start/0]).
 
 start() ->
-    io:format("~n=== Sistema P2P ===~n"),
     print_help(),
     command_loop().
 
-% Loop principal de lectura de comandos
 command_loop() ->
     Line = io:get_line("p2p> "),
     case Line of
@@ -20,16 +18,13 @@ command_loop() ->
             command_loop()
     end.
 
-% Procesa cada comando ingresado
 process_command("") ->
     ok;
 
 process_command("ayuda") ->
     print_help();
 
-% §3.1.5: Comando id_nodo - Muestra el ID del nodo actual
 process_command("id_nodo") ->
-    % Obtenemos el ID desde el proceso p2p_node
     NodeId = case whereis(p2p_node) of
         undefined -> 
             "desconocido";
@@ -40,44 +35,36 @@ process_command("id_nodo") ->
                 _ -> "desconocido"
             end
     end,
-    io:format("~nID del nodo: ~s~n", [NodeId]);
+    io:format("NodoID: ~s~n", [NodeId]);
 
-% §3.1.5: Comando listar_mis_archivos - Lista archivos de la carpeta compartida
 process_command("listar_mis_archivos") ->
     Files = file_manager:get_shared_files(),
-    io:format("~n=== Mis Archivos Compartidos ===~n"),
+    io:format("~nArchivos compartidos:~n"),
     case Files of
         [] ->
-            io:format("No hay archivos compartidos~n");
+            io:format("  (sin archivos)~n");
         _ ->
-            % Mostramos cada archivo con su tamaño en MB
             lists:foreach(fun({Name, Size, _Path}) ->
                 SizeMB = Size / 1048576,
-                io:format("  • ~s (~.2f MB)~n", [Name, SizeMB])
-            end, Files),
-            io:format("~nTotal: ~p archivo(s)~n", [length(Files)])
+                io:format("  ~s (~.2f MB)~n", [Name, SizeMB])
+            end, Files)
     end;
 
-% Comando nodos - Lista nodos conocidos en la red
 process_command("getNodes") ->
     Nodes = node_registry:get_all_nodes(),
-    io:format("~n=== Nodos Conocidos ===~n"),
+    io:format("~nNodos conocidos:~n"),
     case Nodes of
         [] ->
-            io:format("No hay nodos conocidos~n");
+            io:format("  (sin nodos)~n");
         _ ->
             lists:foreach(fun({NodeId, Ip, Port}) ->
-                io:format("  • ~s (~p:~w)~n", [NodeId, Ip, Port])
-            end, Nodes),
-            io:format("~nTotal: ~p nodo(s)~n", [length(Nodes)])
+                io:format("  ~s (~p:~w)~n", [NodeId, Ip, Port])
+            end, Nodes)
     end;
 
-% Comando buscar - Busca archivos en todos los nodos de la red
-% quiza es demasiado rustico (revisar forma de flexibilizacion)
 process_command("buscar " ++ Pattern) ->
     search:search_all_nodes(Pattern);
 
-% Comando descargar - Descarga un archivo desde un nodo específico (concurrente)
 process_command("descargar " ++ Rest) ->
     Parts = string:tokens(Rest, " "),
     case length(Parts) of
@@ -85,16 +72,13 @@ process_command("descargar " ++ Rest) ->
             FileName = lists:nth(1, Parts),
             NodeId = lists:nth(2, Parts),
             spawn(fun() -> download:download_from_node(FileName, NodeId) end),
-            io:format("Descarga iniciada en segundo plano...~n");
+            io:format("Descargando...~n");
         _ ->
-            io:format("Uso: descargar <nombre_archivo> <nodo_id>~n")
+            io:format("Uso: descargar <archivo> <nodo>~n")
     end;
 
-% Comando salir - Cierra el Nodo
-% §3.1.5: Comando salir - Cierra el nodo
 process_command("salir") ->
-    io:format("~nCerrando el nodo...~n"),
-    % Detenemos todos los componentes
+    io:format("Cerrando...~n"),
     discovery:stop(),
     tcp_server:stop(),
     file_manager:stop(),

@@ -3,13 +3,11 @@
 
 -record(node_info, {id, ip, port, last_seen}).
 
-% Levanta el registro de nodos
 start() ->
     Pid = spawn(fun() -> init() end),
     register(node_registry, Pid),
     ok.
 
-% Detiene el registro
 stop() ->
     case whereis(node_registry) of
         undefined -> ok;
@@ -19,12 +17,10 @@ stop() ->
             ok
     end.
 
-% Agrega o actualiza un nodo
 add_node(NodeId, Ip, Port) ->
     node_registry ! {add_node, NodeId, Ip, Port},
     ok.
 
-% Devuelve todos los nodos que conocemos
 get_all_nodes() ->
     node_registry ! {get_all_nodes, self()},
     receive
@@ -33,7 +29,6 @@ get_all_nodes() ->
         []
     end.
 
-% Obtiene un nodo específico por ID
 get_node(NodeId) ->
     node_registry ! {get_node, NodeId, self()},
     receive
@@ -43,23 +38,17 @@ get_node(NodeId) ->
         {error, timeout}
     end.
 
-% Solicita limpieza de nodos inactivos
 cleanup_inactive_nodes() ->
     node_registry ! cleanup_inactive,
     ok.
 
-% Inicializa el loop con mapa vacio
 init() ->
-    io:format("Registro de nodos iniciado~n"),
-    % Inicia timer de limpieza cada 30 segundos
     erlang:send_after(30000, self(), cleanup_inactive),
     loop(#{}).
 
-% Loop principal del registro
 loop(Nodes) ->
     receive
         {add_node, NodeId, Ip, Port} ->
-            % Timestamp actual en segundos
             Now = erlang:system_time(second),
             NodeInfo = #node_info{
                 id = NodeId,
@@ -68,7 +57,6 @@ loop(Nodes) ->
                 last_seen = Now
             },
             NewNodes = maps:put(NodeId, NodeInfo, Nodes),
-            io:format("Nodo agregado/actualizado: ~s (~p:~p)~n", [NodeId, Ip, Port]),
             loop(NewNodes);
         
         {get_all_nodes, From} ->
@@ -92,20 +80,17 @@ loop(Nodes) ->
             loop(Nodes);
         
         cleanup_inactive ->
-            % Limpia nodos que no han enviado HELLO en 45+ segundos
             Now = erlang:system_time(second),
             NewNodes = maps:filter(fun(_NodeId, Info) ->
                 TimeSinceLastSeen = Now - Info#node_info.last_seen,
                 if 
                     TimeSinceLastSeen > 45 ->
-                        io:format("Nodo inactivo eliminado: ~s (sin HELLO por ~p seg)~n", 
-                                 [Info#node_info.id, TimeSinceLastSeen]),
-                        false;  % Eliminar
+                        io:format("Nodo inactivo: ~s~n", [Info#node_info.id]),
+                        false;
                     true ->
-                        true    % Mantener
+                        true
                 end
             end, Nodes),
-            % Programa siguiente limpieza en 30 segundos
             erlang:send_after(30000, self(), cleanup_inactive),
             loop(NewNodes);
         

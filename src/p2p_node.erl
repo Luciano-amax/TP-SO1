@@ -14,27 +14,25 @@ start(TcpPort) ->
     
     timer:sleep(1000),
     
-    io:format("~n=== Iniciando nodo P2P ===~n~n"),
-    
     io:format("Leyendo carpeta compartida..."),
     FileManagerPid = file_manager:start(),
-    io:format("Completo~n"),
+    io:format("OK~n"),
     
     io:format("Obteniendo nombre de Nodo..."),
     {ok, NodeId} = discovery:request_node_id(),
-    io:format("NodoID confirmado: ~s~n", [NodeId]),
+    io:format("OK (~s)~n", [NodeId]),
     
-    io:format("Creando registro de nodos..."),
+    io:format("Iniciando registro de nodos..."),
     NodeRegistryPid = node_registry:start(),
-    io:format("Completo~n"),
+    io:format("OK~n"),
     
     io:format("Iniciando servidor TCP..."),
     TcpServerPid = tcp_server:start(TcpPort),
-    io:format("Completo~n"),
+    io:format("OK~n"),
     
     io:format("Iniciando broadcasts HELLO..."),
     ok = hello_broadcast:start(NodeId, TcpPort),
-    io:format("Completo~n"),
+    io:format("OK~n"),
     
     register(p2p_node, self()),
     
@@ -43,9 +41,7 @@ start(TcpPort) ->
     put(node_registry, NodeRegistryPid),
     put(tcp_server, TcpServerPid),
     
-    io:format("~n=== Nodo P2P iniciado ===~n"),
-    io:format("NodoID: ~s~n", [NodeId]),
-    io:format("Puerto TCP: ~p~n~n", [TcpPort]),
+    io:format("~nNodo iniciado: ~s (puerto ~p)~n~n", [NodeId, TcpPort]),
     
     timer:sleep(1000),
     
