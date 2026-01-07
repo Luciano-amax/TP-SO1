@@ -96,13 +96,13 @@ process_request(Socket, RequestStr, IsDownload) ->
             end
     end.
 
-% Maneja búsqueda de archivos
+% Maneja busqueda de archivos
 handle_search_request(Socket, Pattern) ->
     {ok, MyNodeId} = get_node_id(),
     Files = file_manager:search_files(Pattern),
     
     lists:foreach(fun({FileName, Size}) ->
-        Response = io_lib:format("SEARCH_RESPONSE ~s ~s ~p~n", [MyNodeId, FileName, Size]),
+        Response = io_lib:format("SEARCH_RESPONSE ~s ~s ~p COMPLETE~n", [MyNodeId, FileName, Size]),
         gen_tcp:send(Socket, Response)
     end, Files).
 
