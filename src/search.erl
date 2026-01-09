@@ -47,13 +47,21 @@ parse_search_response(Line) ->
     Tokens = string:tokens(string:trim(Line), " "),
     case Tokens of
         ["SEARCH_RESPONSE", NodeId, FileName, SizeStr, Status | _Rest] ->
-            {Size, _} = string:to_integer(SizeStr),
-            ChunkInfo = parse_chunk_status(Status),
-            {true, {NodeId, FileName, Size, ChunkInfo}};
+            case string:to_integer(SizeStr) of
+                {Size, _} when is_integer(Size) ->
+                    ChunkInfo = parse_chunk_status(Status),
+                    {true, {NodeId, FileName, Size, ChunkInfo}};
+                _ ->
+                    false
+            end;
         ["SEARCH_RESPONSE", NodeId, FileName, SizeStr] ->
             % Compatibilidad con formato viejo
-            {Size, _} = string:to_integer(SizeStr),
-            {true, {NodeId, FileName, Size, complete}};
+            case string:to_integer(SizeStr) of
+                {Size, _} when is_integer(Size) ->
+                    {true, {NodeId, FileName, Size, complete}};
+                _ ->
+                    false
+            end;
         _ ->
             false
     end.

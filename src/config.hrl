@@ -19,7 +19,7 @@
 -define(NODE_TIMEOUT_SECONDS, 45).
 -define(CLEANUP_INTERVAL, 30000).       % 30 segundos entre limpiezas
 -define(SEARCH_TIMEOUT, 10000).         % 10 segundos para busqueda
--define(DOWNLOAD_TIMEOUT, 30000).       % 30 segundos para descarga
+-define(DOWNLOAD_TIMEOUT, 300000).       % 120 segundos para descarga
 -define(CHUNK_TIMEOUT, 30000).          % 30 segundos por chunk
 
 %% Protocolo
@@ -32,6 +32,8 @@
 -define(CODE_NOTFOUND, 112).
 
 %% Direcciones de broadcast
+%% Para Hamachi usar {25, 255, 255, 255} 
+%% Para LAN local usar {255, 255, 255, 255}
 -define(BROADCAST_ADDR, {255, 255, 255, 255}).
 -define(BROADCAST_OPEN, {0, 0, 0, 0}).
 

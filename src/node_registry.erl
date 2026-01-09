@@ -56,7 +56,13 @@ loop(Nodes) ->
                 port = Port,
                 last_seen = Now
             },
-            NewNodes = maps:put(NodeId, NodeInfo, Nodes),
+            % Elimina cualquier nodo anterior con la misma IP:Puerto pero diferente ID
+            CleanedNodes = maps:filter(fun(OldId, OldInfo) ->
+                not ((OldInfo#node_info.ip =:= Ip) and 
+                     (OldInfo#node_info.port =:= Port) and 
+                     (OldId =/= NodeId))
+            end, Nodes),
+            NewNodes = maps:put(NodeId, NodeInfo, CleanedNodes),
             loop(NewNodes);
         
         {get_all_nodes, From} ->

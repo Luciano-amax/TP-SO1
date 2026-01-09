@@ -92,7 +92,7 @@ request_node_id_internal(Socket, UdpPort, NodeId) ->
 request_node_id_internal(Socket, UdpPort, NodeId, RequestedIds) ->
     % Enviamos NAME_REQUEST con nuestro ID propuesto
     Msg = io_lib:format("NAME_REQUEST ~s\n", [NodeId]),
-    gen_udp:send(Socket, {255, 255, 255, 255}, UdpPort, Msg),
+    gen_udp:send(Socket, ?BROADCAST_ADDR, UdpPort, Msg),
     
     io:format("Solicitando ID: ~s~n", [NodeId]),
     
