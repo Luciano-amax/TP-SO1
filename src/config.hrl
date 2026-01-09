@@ -6,7 +6,8 @@
 -define(UDP_PORT, 12346).
 -define(TCP_PORT_DEFAULT, 12345).
 
-%% Directorios (agregar luego archivos ejemplo)
+%% Directorios (se configuran dinamicamente por puerto)
+%% Los valores por defecto se usan si no se configura
 -define(SHARED_DIR, "./compartida").
 -define(DOWNLOAD_DIR, "./descargas").
 
@@ -22,7 +23,7 @@
 -define(CHUNK_TIMEOUT, 30000).          % 30 segundos por chunk
 
 %% Protocolo
--define(CHUNK_SIZE, 1048576).           % 1MB = 1048576 bytes
+-define(CHUNK_SIZE, 4194304).           % 4MB = 4*1024*1024 bytes
 -define(LARGE_FILE_THRESHOLD, 4194304). % 4MB = 4*1024*1024 bytes
 
 %% Códigos de respuesta TCP

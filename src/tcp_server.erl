@@ -88,6 +88,9 @@ process_request(Socket, RequestStr, IsDownload) ->
             handle_search_request(Socket, Pattern);
         ["DOWNLOAD_REQUEST", FileName] ->
             handle_download_request(Socket, FileName);
+        ["DOWNLOAD_CHUNK", FileName, ChunkIdStr] ->
+            {ChunkId, _} = string:to_integer(ChunkIdStr),
+            handle_chunk_request(Socket, FileName, ChunkId);
         _ ->
             io:format("Request no reconocido: ~s~n", [Msg]),
             case IsDownload of
@@ -102,7 +105,8 @@ handle_search_request(Socket, Pattern) ->
     Files = file_manager:search_files(Pattern),
     
     lists:foreach(fun({FileName, Size}) ->
-        Response = io_lib:format("SEARCH_RESPONSE ~s ~s ~p COMPLETE~n", [MyNodeId, FileName, Size]),
+        % Respuesta de búsqueda: NodeId, Archivo, Tamaño
+        Response = io_lib:format("SEARCH_RESPONSE ~s ~s ~p~n", [MyNodeId, FileName, Size]),
         gen_tcp:send(Socket, Response)
     end, Files).
 
@@ -114,6 +118,54 @@ handle_download_request(Socket, FileName) ->
             gen_tcp:send(Socket, <<112>>)
     end,
     gen_tcp:close(Socket).
+
+% Maneja descarga de un chunk especifico
+handle_chunk_request(Socket, FileName, ChunkId) ->
+    case get_chunk_data(FileName, ChunkId) of
+        {ok, Data} ->
+            Size = byte_size(Data),
+            Hash = crypto:hash(sha256, Data),
+            Msg = <<101, Size:32/integer-big, Hash:32/binary, Data/binary>>,
+            gen_tcp:send(Socket, Msg);
+        {error, not_found} ->
+            gen_tcp:send(Socket, <<112>>)
+    end,
+    gen_tcp:close(Socket).
+
+% Obtiene datos de un chunk especifico
+get_chunk_data(FileName, ChunkId) ->
+    ChunkDir = filename:join(?DOWNLOAD_DIR, "chunks"),
+    ChunkPath = filename:join(ChunkDir, io_lib:format("~s.chunk~p", [FileName, ChunkId])),
+    
+    case file:read_file(ChunkPath) of
+        {ok, Data} ->
+            {ok, Data};
+        {error, enoent} ->
+            case file_manager:get_file(FileName) of
+                {ok, FileData, _Size} ->
+                    extract_chunk_from_file(FileData, ChunkId);
+                {error, not_found} ->
+                    {error, not_found}
+            end
+    end.
+
+% Extrae un chunk de un archivo completo
+extract_chunk_from_file(FileData, ChunkId) ->
+    ChunkSize = 4194304,
+    Offset = ChunkId * ChunkSize,
+    TotalSize = byte_size(FileData),
+    
+    if
+        Offset >= TotalSize ->
+            {error, not_found};
+        Offset + ChunkSize =< TotalSize ->
+            <<_:Offset/binary, Chunk:ChunkSize/binary, _/binary>> = FileData,
+            {ok, Chunk};
+        true ->
+            RemainingSize = TotalSize - Offset,
+            <<_:Offset/binary, Chunk:RemainingSize/binary>> = FileData,
+            {ok, Chunk}
+    end.
 
 send_file(Socket, Data, Size) ->
     MB = 1024 * 1024,

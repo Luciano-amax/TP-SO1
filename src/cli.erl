@@ -68,13 +68,17 @@ process_command("buscar " ++ Pattern) ->
 process_command("descargar " ++ Rest) ->
     Parts = string:tokens(Rest, " "),
     case length(Parts) of
+        1 ->
+            FileName = lists:nth(1, Parts),
+            spawn(fun() -> download:download_multi_source(FileName) end),
+            ok;
         2 ->
             FileName = lists:nth(1, Parts),
             NodeId = lists:nth(2, Parts),
             spawn(fun() -> download:download_from_node(FileName, NodeId) end),
             io:format("Descargando...~n");
         _ ->
-            io:format("Uso: descargar <archivo> <nodo>~n")
+            io:format("Uso: descargar <archivo> [nodo]~n")
     end;
 
 process_command("salir") ->
@@ -93,10 +97,11 @@ process_command(Unknown) ->
 % Muestra la lista de comandos disponibles
 print_help() ->
     io:format("~nComandos disponibles:~n"),
-    io:format("  id_nodo              - Muestra el ID único del nodo~n"),
+    io:format("  id_nodo              - Muestra el ID unico del nodo~n"),
     io:format("  listar_mis_archivos  - Lista los archivos compartidos~n"),
-    io:format("  getNodes                - Lista los nodos conocidos en la red~n"),
+    io:format("  getNodes             - Lista los nodos conocidos en la red~n"),
     io:format("  buscar <patron>      - Busca archivos en la red~n"),
-    io:format("  descargar <archivo> <nodo> - Descarga un archivo de un nodo~n"),
+    io:format("  descargar <archivo>  - Descarga desde multiples nodos~n"),
+    io:format("  descargar <archivo> <nodo> - Descarga de un nodo especifico~n"),
     io:format("  salir                - Cierra el nodo P2P~n"),
     io:format("  ayuda                - Muestra esta ayuda~n~n").

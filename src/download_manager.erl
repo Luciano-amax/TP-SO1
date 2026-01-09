@@ -143,8 +143,10 @@ loop(Downloads) ->
         {assign_chunk, FileName, NodeId, From} ->
             case maps:find(FileName, Downloads) of
                 {ok, State} ->
+                    % Asigna un chunk que todavía no está siendo descargado
                     case find_available_chunk(State, NodeId) of
                         {ok, ChunkId} ->
+                            % Marca chunk como "downloading" para evitar duplicados
                             NewChunksStatus = maps:update(ChunkId, downloading, State#download_state.chunks_status),
                             NewActiveDownloads = maps:put(ChunkId, NodeId, State#download_state.active_downloads),
                             NewState = State#download_state{
@@ -237,9 +239,12 @@ build_chunk_sources(SearchResults, TotalChunks) ->
         end
     end, ChunkMap, SearchResults).
 
-% Busca un chunk pendiente que el nodo especificado tenga disponible
+% Busca un chunk pendiente que el nodo tenga disponible
+% Evita asignar el mismo chunk a múltiples conexiones
 find_available_chunk(State, NodeId) ->
+    % Obtiene lista de chunks que este nodo tiene
     AvailableSources = maps:get(NodeId, invert_chunk_sources(State#download_state.chunk_sources), []),
+    % Filtra solo chunks pendientes (no descargando ni completos)
     PendingChunks = [ChunkId || {ChunkId, Status} <- maps:to_list(State#download_state.chunks_status),
                                  Status =:= pending,
                                  lists:member(ChunkId, AvailableSources)],

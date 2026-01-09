@@ -1,7 +1,8 @@
 -module(file_manager).
 -include("config.hrl").
 -include_lib("kernel/include/file.hrl").
--export([start/0, stop/0, get_shared_files/0, search_files/1, get_file/1]).
+-export([start/0, stop/0, get_shared_files/0, search_files/1, get_file/1, get_available_chunks/1]).
+
 
 % Arranca el proceso que maneja los archivos
 start() ->
@@ -29,9 +30,10 @@ get_shared_files() ->
 
 % Busca archivos que coincidan con el patron (soporta wildcards)
 search_files(Pattern) ->
-    Files = filelib:wildcard(Pattern, ?SHARED_DIR),
+    SharedDir = ?SHARED_DIR,
+    Files = filelib:wildcard(Pattern, SharedDir),
     lists:filtermap(fun(FileName) ->
-        FilePath = filename:join(?SHARED_DIR, FileName),
+        FilePath = filename:join(SharedDir, FileName),
         case filelib:is_regular(FilePath) of
             true ->
                 Size = filelib:file_size(FilePath),
@@ -58,7 +60,8 @@ loop(Files) ->
 
 % Lee un archivo de la carpeta compartida y devuelve su contenido
 get_file(FileName) ->
-    FilePath = filename:join(?SHARED_DIR, FileName),
+    SharedDir = ?SHARED_DIR,
+    FilePath = filename:join(SharedDir, FileName),
     case filelib:is_regular(FilePath) of
         true ->
             case file:read_file(FilePath) of
@@ -74,16 +77,17 @@ get_file(FileName) ->
 
 % Escanea el directorio y arma la lista de archivos
 scan_directory() ->
-    case filelib:is_dir(?SHARED_DIR) of
+    SharedDir = ?SHARED_DIR,
+    case filelib:is_dir(SharedDir) of
         false ->
-            io:format("Directorio ~s no existe~n", [?SHARED_DIR]),
+            io:format("Directorio ~s no existe~n", [SharedDir]),
             [];
         true ->
-            case file:list_dir(?SHARED_DIR) of
+            case file:list_dir(SharedDir) of
                 {ok, FileNames} ->
                     % Filtramos solo archivos regulares y armamos tuplas con toda la info
                     lists:filtermap(fun(FileName) ->
-                        FilePath = filename:join(?SHARED_DIR, FileName),
+                        FilePath = filename:join(SharedDir, FileName),
                         case filelib:is_regular(FilePath) of
                             true ->
                                 case file:read_file_info(FilePath) of
@@ -103,3 +107,48 @@ scan_directory() ->
                     []
             end
     end.
+
+% Detecta que chunks tiene el nodo para un archivo
+get_available_chunks(FileName) ->
+    CompletePath = filename:join(?SHARED_DIR, FileName),
+    case filelib:is_regular(CompletePath) of
+        true ->
+            Size = filelib:file_size(CompletePath),
+            TotalChunks = calculate_total_chunks(Size, 4194304),
+            {complete, TotalChunks};
+        false ->
+            ChunkDir = filename:join(?DOWNLOAD_DIR, "chunks"),
+            case find_chunk_files(ChunkDir, FileName) of
+                [] -> 
+                    not_found;
+                ChunkIds ->
+                    {partial, lists:sort(ChunkIds)}
+            end
+    end.
+
+% Busca archivos de chunks en disco
+find_chunk_files(Dir, FileName) ->
+    Pattern = filename:join(Dir, FileName ++ ".chunk*"),
+    Files = filelib:wildcard(Pattern),
+    lists:filtermap(fun(File) ->
+        case parse_chunk_id(File) of
+            {ok, Id} -> {true, Id};
+            error -> false
+        end
+    end, Files).
+
+% Extrae el ID del chunk del nombre de archivo
+parse_chunk_id(FilePath) ->
+    BaseName = filename:basename(FilePath),
+    case string:split(BaseName, ".chunk", trailing) of
+        [_, IdStr] ->
+            case string:to_integer(IdStr) of
+                {Id, _} -> {ok, Id};
+                _ -> error
+            end;
+        _ -> error
+    end.
+
+% Calcula cantidad total de chunks
+calculate_total_chunks(TotalSize, ChunkSize) ->
+    (TotalSize + ChunkSize - 1) div ChunkSize.
