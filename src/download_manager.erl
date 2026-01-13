@@ -17,9 +17,14 @@
 }).
 
 start() ->
-    Pid = spawn(fun() -> loop(#{}) end),
-    register(download_manager, Pid),
-    ok.
+    case whereis(download_manager) of
+        undefined ->
+            Pid = spawn(fun() -> loop(#{}) end),
+            register(download_manager, Pid),
+            ok;
+        _Pid ->
+            ok  % Ya existe, reutilizarlo
+    end.
 
 stop() ->
     case whereis(download_manager) of
@@ -41,8 +46,13 @@ init_download(FileName, TotalSize, ChunkSize, SearchResults) ->
 
 % Marca un chunk como completado
 mark_chunk_complete(FileName, ChunkId) ->
-    download_manager ! {mark_complete, FileName, ChunkId},
-    ok.
+    case whereis(download_manager) of
+        undefined -> 
+            ok;  % Download_manager ya no existe, ignorar
+        Pid when is_pid(Pid) ->
+            Pid ! {mark_complete, FileName, ChunkId},
+            ok
+    end.
 
 % Asigna un chunk pendiente a un nodo especifico
 assign_chunk(FileName, NodeId) ->
