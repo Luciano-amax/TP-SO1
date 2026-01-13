@@ -33,7 +33,8 @@
 
 %% Direcciones de broadcast
 %% Para Hamachi usar {25, 255, 255, 255} 
-%% Para LAN local usar {255, 255, 255, 255}
+%% Para red local 192.168.1.X usar {192, 168, 1, 255}
+%% Para LAN general usar {255, 255, 255, 255}
 -define(BROADCAST_ADDR, {255, 255, 255, 255}).
 -define(BROADCAST_OPEN, {0, 0, 0, 0}).
 

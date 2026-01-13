@@ -320,38 +320,47 @@ start_multi_download(FileName, SearchResults) ->
     download_manager:start(),
     {ok, _State} = download_manager:init_download(FileName, TotalSize, ChunkSize, SearchResults),
     
-    io:format("Iniciando descarga paralela (~p nodos)~n", [length(SearchResults)]),
+    % Calcular cantidad de workers: múltiples por nodo para descarga paralela real
+    SourceNodes = extract_source_nodes(SearchResults),
+    WorkersPerNode = 4,  % 4 workers paralelos por nodo
+    TotalWorkers = length(SourceNodes) * WorkersPerNode,
+    
+    io:format("Iniciando descarga paralela (~p nodos, ~p workers)~n", [length(SourceNodes), TotalWorkers]),
     
     Parent = self(),
-    SourceNodes = extract_source_nodes(SearchResults),
     
+    % Lanzar múltiples workers por cada nodo para descargar chunks en paralelo
     lists:foreach(fun(NodeId) ->
-        spawn(fun() -> download_worker(Parent, FileName, NodeId) end)
+        lists:foreach(fun(_) ->
+            spawn(fun() -> download_worker(Parent, FileName, NodeId) end)
+        end, lists:seq(1, WorkersPerNode))
     end, SourceNodes),
     
-    wait_for_completion(FileName, length(SourceNodes)).
+    wait_for_completion(FileName, TotalWorkers).
 
 % Extrae lista de NodeIds unicos
 extract_source_nodes(SearchResults) ->
     lists:usort([NodeId || {NodeId, _, _, _} <- SearchResults]).
 
 % Trabajador que descarga chunks desde un nodo
-% Cada worker pide y descarga chunks diferentes para evitar duplicados
+% Cada worker descarga múltiples chunks hasta que no haya más disponibles (paralelo real)
 download_worker(Parent, FileName, NodeId) ->
     case download_manager:assign_chunk(FileName, NodeId) of
         {ok, ChunkId} ->
-            % Descarga chunk asignado en paralelo
+            % Descarga chunk asignado
             case download_chunk_from_node(FileName, ChunkId, NodeId) of
                 ok ->
                     download_manager:mark_chunk_complete(FileName, ChunkId),
-                    % Solicita siguiente chunk disponible
+                    % Worker continúa pidiendo más chunks mientras haya disponibles
                     download_worker(Parent, FileName, NodeId);
                 {error, Reason} ->
                     io:format("Error descargando chunk ~p desde ~s: ~p~n", [ChunkId, NodeId, Reason]),
-                    Parent ! {worker_error, NodeId, ChunkId}
+                    Parent ! {worker_error, NodeId, ChunkId},
+                    % Reintenta con otro chunk
+                    download_worker(Parent, FileName, NodeId)
             end;
         {error, no_chunks} ->
-            % No hay mas chunks para este nodo
+            % No hay más chunks disponibles, worker termina
             Parent ! {worker_done, NodeId}
     end.
 
