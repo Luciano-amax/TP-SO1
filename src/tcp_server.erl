@@ -175,7 +175,8 @@ send_file(Socket, Data, Size) ->
     
     if
         Size >= (MB * 4) ->
-            Msg = <<Code/binary, SizeBin/binary, Hash:32/binary, MB:32/integer-big>>,
+            ChunkSize = 4 * 1024 * 1024,  % 4MB chunks
+            Msg = <<Code/binary, SizeBin/binary, Hash:32/binary, ChunkSize:32/integer-big>>,
             case gen_tcp:send(Socket, Msg) of
                 ok -> 
                     send_chunks(Socket, Data, 0);
@@ -191,9 +192,9 @@ send_file(Socket, Data, Size) ->
             end
     end.
 
-% Envia archivo en chunks de 1MB
+% Envia archivo en chunks de 4MB (mismo tamaño que chunks lógicos)
 send_chunks(Socket, Data, ChunkIndex) ->
-    ChunkSize = 1024 * 1024,
+    ChunkSize = 4 * 1024 * 1024,  % 4MB para máxima eficiencia
     DataSize = byte_size(Data),
     
     if
@@ -207,7 +208,7 @@ send_chunks(Socket, Data, ChunkIndex) ->
                     {error, Reason}
             end;
         DataSize > 0 ->
-            % Ultimo chunk (menor a 1MB)
+            % Ultimo chunk (menor a 4MB)
             Msg = <<111, ChunkIndex:16/integer-big, DataSize:32/integer-big, Data/binary>>,
             case gen_tcp:send(Socket, Msg) of
                 ok -> ok;

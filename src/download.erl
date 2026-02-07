@@ -391,8 +391,8 @@ download_chunk_from_node(FileName, ChunkId, NodeId) ->
 
 % Recibe archivo completo y extrae el chunk asignado
 receive_and_extract_chunk(Socket, FileName, ChunkId) ->
-    % Descargamos el archivo completo SIN validar hash (validaremos el chunk extraído)
-    case receive_file_to_memory_no_hash_validation(Socket) of
+    % Simplemente descargamos el archivo completo usando receive_file
+    case receive_file_to_memory(Socket) of
         {ok, FileData} ->
             % Ahora extraemos solo el chunk que necesitamos
             extract_and_save_chunk(FileName, ChunkId, FileData);
@@ -400,23 +400,23 @@ receive_and_extract_chunk(Socket, FileName, ChunkId) ->
             {error, Reason}
     end.
 
-% Recibe archivo completo en memoria SIN validar hash (para extracción de chunks)
-receive_file_to_memory_no_hash_validation(Socket) ->
+% Recibe archivo completo en memoria (sin guardarlo a disco)
+receive_file_to_memory(Socket) ->
     case gen_tcp:recv(Socket, 1, 5000) of
         {ok, <<101>>} ->
             case gen_tcp:recv(Socket, 4, 5000) of
                 {ok, SizeBin} ->
                     <<Size:32/integer-big>> = SizeBin,
                     
-                    % Hash SHA256 (32 bytes) - leerlo pero NO validarlo
-                    % El hash es del archivo completo, no del chunk individual
+                    % Hash SHA256 (32 bytes) - Mejora §5.3
+                    % Timeout 2s: detecta si hay hash disponible
                     MB = 1024 * 1024,
                     case gen_tcp:recv(Socket, 32, 2000) of
-                        {ok, _Hash} when byte_size(_Hash) == 32 ->
-                            % Ignorar el hash, solo recibir datos
-                            receive_full_file_data(Socket, Size, MB, no_hash);
+                        {ok, ExpectedHash} when byte_size(ExpectedHash) == 32 ->
+                            % Archivo con hash
+                            receive_full_file_data(Socket, Size, MB, ExpectedHash);
                         _ ->
-                            % Sin hash
+                            % Archivo sin hash
                             receive_full_file_data(Socket, Size, MB, no_hash)
                     end;
                 {error, Reason} ->
@@ -551,9 +551,11 @@ wait_for_completion(FileName, RemainingWorkers) ->
             io:format("~nTodos los chunks descargados, ensamblando...~n"),
             case assemble_file(FileName) of
                 ok ->
-                    verify_assembled_file(FileName);
+                    verify_assembled_file(FileName),
+                    download_manager:stop();
                 {error, Reason} ->
-                    io:format("Error ensamblando archivo: ~p~n", [Reason])
+                    io:format("Error ensamblando archivo: ~p~n", [Reason]),
+                    download_manager:stop()
             end;
         {ok, false} ->
             receive
@@ -564,7 +566,8 @@ wait_for_completion(FileName, RemainingWorkers) ->
                     io:format("Error en worker ~s chunk ~p, reintentando...~n", [NodeId, ChunkId]),
                     wait_for_completion(FileName, RemainingWorkers)
             after ?DOWNLOAD_TIMEOUT ->
-                io:format("Timeout esperando descarga (puede haber workers activos aún)~n")
+                io:format("Timeout esperando descarga~n"),
+                download_manager:stop()
             end
     end.
 

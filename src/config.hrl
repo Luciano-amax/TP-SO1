@@ -25,6 +25,7 @@
 %% Protocolo
 -define(CHUNK_SIZE, 4194304).           % 4MB = 4*1024*1024 bytes
 -define(LARGE_FILE_THRESHOLD, 4194304). % 4MB = 4*1024*1024 bytes
+-define(WORKERS_PER_NODE, 4).           % Workers paralelos por nodo
 
 %% Códigos de respuesta TCP
 -define(CODE_OK, 101).
