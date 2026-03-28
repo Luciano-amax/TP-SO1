@@ -5,6 +5,9 @@
 search_all_nodes(Pattern) ->
     {ok, MyNodeId} = get_node_id(),
     Nodes = node_registry:get_all_nodes(),
+    % Se incorporan primero los resultados locales para cumplir con la
+    % búsqueda consolidada pedida por el enunciado del TP.
+    LocalResults = get_local_results(MyNodeId, Pattern),
     
     io:format("~nBuscando '~s'...~n", [Pattern]),
     
@@ -13,7 +16,7 @@ search_all_nodes(Pattern) ->
         spawn(fun() -> search_in_node(Parent, MyNodeId, Ip, Port, Pattern) end)
     end, Nodes),
     
-    collect_results(length(Nodes), []).
+    collect_results(length(Nodes), LocalResults).
 
 % Busca en un nodo especifico
 search_in_node(Parent, MyNodeId, Ip, Port, Pattern) ->
@@ -74,6 +77,12 @@ parse_chunk_status("CHUNKS:" ++ ChunkList) ->
     {partial, ChunkIds};
 parse_chunk_status(_) ->
     complete.
+
+get_local_results(MyNodeId, Pattern) ->
+    Files = file_manager:search_files(Pattern),
+    % Los archivos propios se informan como completos porque forman
+    % parte de la carpeta compartida del nodo local.
+    [{MyNodeId, FileName, Size, complete} || {FileName, Size} <- Files].
 
 collect_results(0, Results) ->
     display_results(Results);
