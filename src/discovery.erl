@@ -12,7 +12,7 @@ request_node_id() ->
                                  {active, true}]) of
         {ok, Socket} ->
             % Generamos un ID aleatorio
-            NodeId = generate_random_id(4),
+            NodeId = read_manual_or_auto(),
             
             % Pedimos consenso a la red
             case request_node_id_internal(Socket, UdpPort, NodeId) of
@@ -40,7 +40,7 @@ start(UdpPort, TcpPort) ->
                                            {active, true}]),
     
     % Generamos un ID aleatorio
-    NodeId = generate_random_id(4),
+    NodeId = read_manual_or_auto(),
     
     % Pedimos consenso a la red
     case request_node_id_internal(Socket, UdpPort, NodeId) of
@@ -76,6 +76,18 @@ get_node_id() ->
                 undefined
             end
     end.
+
+read_manual_or_auto() ->
+    Option = io:get_line("Manual o automático? (m/a): "),
+    case normalize_choice(Option) of
+        "m" -> string:trim(io:get_line("Ingrese nuevo ID: "));
+        _ -> generate_random_id(4)
+    end.
+
+normalize_choice(Option) ->
+    Clean = string:replace(Option, "\r", "", [global]),
+    Lower = string:to_lower(string:trim(Clean)),
+    Lower.
 
 % Genera un ID aleatorio de N caracteres
 generate_random_id(N) ->
@@ -118,6 +130,7 @@ wait_for_rejection(Socket, NodeId, UdpPort, Deadline, RequestedIds) ->
     if 
         TimeLeft =< 0 ->
             % Se acabó el tiempo, nadie rechazó el ID
+            io:format("Timeout, se acepta el nombre: ~s~n", [NodeId]),
             ok;
         true ->
             receive
@@ -128,7 +141,7 @@ wait_for_rejection(Socket, NodeId, UdpPort, Deadline, RequestedIds) ->
                             io:format("ID ~s ya existe, reintentando...~n", [NodeId]),
                             % Espera random entre 2-10 segundos
                             timer:sleep(2000 + rand:uniform(8000)),
-                            NewId = generate_random_id(4),
+                            NewId = read_manual_or_auto(),
                             request_node_id_internal(Socket, UdpPort, NewId, RequestedIds);
                         _ ->
                             % Es otro mensaje (ej: nuestro propio broadcast o de otro nodo)
@@ -137,6 +150,7 @@ wait_for_rejection(Socket, NodeId, UdpPort, Deadline, RequestedIds) ->
                     end
             after TimeLeft ->
                 % Timeout final alcanzado
+                io:format("Timeout, se acepta el nombre: ~s~n", [NodeId]),
                 ok
             end
     end.
