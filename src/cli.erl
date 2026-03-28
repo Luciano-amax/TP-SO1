@@ -83,6 +83,7 @@ process_command("descargar " ++ Rest) ->
 
 process_command("salir") ->
     io:format("Cerrando...~n"),
+    hello_broadcast:stop(),
     discovery:stop(),
     tcp_server:stop(),
     file_manager:stop(),

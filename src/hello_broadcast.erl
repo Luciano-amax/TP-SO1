@@ -5,18 +5,8 @@
 % Inicia broadcasts HELLO periódicos
 start(NodeId, TcpPort) ->
     catch unregister(hello_broadcast),
-    
-    {ok, Socket} = gen_udp:open(?UDP_PORT, [{active, true}, 
-                                             {broadcast, true}, 
-                                             {ip, {0,0,0,0}}, 
-                                             {reuseaddr, true}]),
-    
-    HelloMsg = io_lib:format("HELLO ~s ~w\n", [NodeId, TcpPort]),
-    
-    Pid = spawn(fun() -> hello_loop(Socket, HelloMsg, NodeId) end),
+    Pid = spawn(fun() -> init_sender(NodeId, TcpPort) end),
     register(hello_broadcast, Pid),
-    gen_udp:controlling_process(Socket, Pid),
-    
     ok.
 
 % Detiene broadcasts
@@ -26,39 +16,16 @@ stop() ->
         Pid -> exit(Pid, shutdown)
     end.
 
-% Loop que envía HELLO y procesa recepción
-hello_loop(Socket, HelloMsg, MyNodeId) ->
+init_sender(NodeId, TcpPort) ->
+    {ok, Socket} = gen_udp:open(0, [binary, {broadcast, true}]),
+    HelloMsg = io_lib:format("HELLO ~s ~w\n", [NodeId, TcpPort]),
+    hello_loop(Socket, HelloMsg).
+
+% Loop que envía HELLO periódicamente
+hello_loop(Socket, HelloMsg) ->
     gen_udp:send(Socket, ?BROADCAST_ADDR, ?UDP_PORT, HelloMsg),
     
     % Intervalo aleatorio entre 15-20 segundos
     Interval = ?HELLO_INTERVAL_MIN + rand:uniform(?HELLO_INTERVAL_MAX - ?HELLO_INTERVAL_MIN),
     timer:sleep(Interval),
-    
-    flush_messages(Socket, MyNodeId),
-    
-    hello_loop(Socket, HelloMsg, MyNodeId).
-
-% Procesa mensajes UDP acumulados
-flush_messages(Socket, MyNodeId) ->
-    receive
-        {udp, Socket, SrcIp, _SrcPort, Data} ->
-            Msg = string:trim(Data),
-            Tokens = string:tokens(Msg, " "),
-            
-            case Tokens of
-                ["HELLO", NodeId, TcpPortStr] ->
-                    if 
-                        NodeId /= MyNodeId ->
-                            {TcpPort, _} = string:to_integer(TcpPortStr),
-                            node_registry:add_node(NodeId, SrcIp, TcpPort),
-                            io:format("Nodo agregado/actualizado: ~s (~p:~w)~n", [NodeId, SrcIp, TcpPort]);
-                        true ->
-                            ok
-                    end;
-                _ ->
-                    ok
-            end,
-            flush_messages(Socket, MyNodeId)
-    after 0 ->
-        ok
-    end.
+    hello_loop(Socket, HelloMsg).

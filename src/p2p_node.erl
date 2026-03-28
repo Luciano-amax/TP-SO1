@@ -9,25 +9,24 @@ start(TcpPort) ->
     catch unregister(node_registry),
     catch unregister(tcp_server),
     catch unregister(discovery),
-    catch unregister(hello_sender),
-    catch unregister(hello_receiver),
+    catch unregister(hello_broadcast),
     
-    timer:sleep(1000),
-    
+    % Se elimina la pausa inicial porque no integra el protocolo del TP
+    % y demoraba artificialmente la puesta en marcha del nodo.
     io:format("Leyendo carpeta compartida..."),
-    FileManagerPid = file_manager:start(),
+    ok = file_manager:start(),
     io:format("OK~n"),
-    
-    io:format("Obteniendo nombre de Nodo..."),
-    {ok, NodeId} = discovery:request_node_id(),
-    io:format("OK (~s)~n", [NodeId]),
     
     io:format("Iniciando registro de nodos..."),
-    NodeRegistryPid = node_registry:start(),
+    ok = node_registry:start(),
     io:format("OK~n"),
+
+    io:format("Obteniendo nombre de Nodo..."),
+    {ok, NodeId} = discovery:start(?UDP_PORT, TcpPort),
+    io:format("OK (~s)~n", [NodeId]),
     
     io:format("Iniciando servidor TCP..."),
-    TcpServerPid = tcp_server:start(TcpPort),
+    ok = tcp_server:start(TcpPort),
     io:format("OK~n"),
     
     io:format("Iniciando broadcasts HELLO..."),
@@ -37,13 +36,16 @@ start(TcpPort) ->
     register(p2p_node, self()),
     
     put(node_id, NodeId),
-    put(file_manager, FileManagerPid),
-    put(node_registry, NodeRegistryPid),
-    put(tcp_server, TcpServerPid),
+    put(file_manager, whereis(file_manager)),
+    put(node_registry, whereis(node_registry)),
+    put(tcp_server, whereis(tcp_server)),
+    put(discovery, whereis(discovery)),
+    put(hello_broadcast, whereis(hello_broadcast)),
     
     io:format("~nNodo iniciado: ~s (puerto ~p)~n~n", [NodeId, TcpPort]),
     
-    timer:sleep(1000),
+    % Se omite la pausa previa a la CLI para que el nodo quede operativo
+    % ni bien finaliza el consenso y el arranque de sus componentes
     
     % 7. Iniciar CLI (esto bloquea hasta que el usuario escriba "salir")
     cli:start(),
@@ -74,13 +76,13 @@ stop() ->
                         undefined -> ok;
                         NrPid -> exit(NrPid, shutdown)
                     end,
-                    case proplists:get_value(hello_sender, Dict) of
+                    case proplists:get_value(discovery, Dict) of
                         undefined -> ok;
-                        HsPid -> exit(HsPid, shutdown)
+                        DiscoveryPid -> exit(DiscoveryPid, shutdown)
                     end,
-                    case proplists:get_value(hello_receiver, Dict) of
+                    case proplists:get_value(hello_broadcast, Dict) of
                         undefined -> ok;
-                        HrPid -> exit(HrPid, shutdown)
+                        HelloPid -> exit(HelloPid, shutdown)
                     end;
                 _ -> ok
             end,

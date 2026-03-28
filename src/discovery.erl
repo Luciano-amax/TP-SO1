@@ -48,6 +48,7 @@ start(UdpPort, TcpPort) ->
             % Guardamos los IDs que solicitamos durante el consenso
             RequestedIds = sets:from_list([FinalId]),
             Pid = spawn(fun() -> loop(Socket, FinalId, TcpPort, RequestedIds) end),
+            ok = gen_udp:controlling_process(Socket, Pid),
             register(discovery, Pid),
             io:format("ID consensuado: ~s~n", [FinalId]),
             {ok, FinalId};
@@ -110,11 +111,14 @@ request_node_id_internal(Socket, UdpPort, NodeId, RequestedIds) ->
     
     % Agregamos este ID al conjunto de IDs solicitados
     NewRequestedIds = sets:add_element(NodeId, RequestedIds),
-    
-    % Calculamos el deadline una sola vez aca
-    % Bug arreglado: antes haciamos receive recursivo que reiniciaba el timeout
-    % cada vez que llegaba un mensaje (incluso nuestro propio broadcast)
-    case wait_for_rejection(Socket, NodeId, UdpPort, erlang:monotonic_time(millisecond) + 10000, NewRequestedIds) of
+
+    case wait_for_rejection(
+        Socket,
+        NodeId,
+        UdpPort,
+        erlang:monotonic_time(millisecond) + ?ID_REQUEST_TIMEOUT,
+        NewRequestedIds
+    ) of
         ok ->
             io:format("ID consensuado: ~s~n", [NodeId]),
             {ok, NodeId};
@@ -159,7 +163,7 @@ wait_for_rejection(Socket, NodeId, UdpPort, Deadline, RequestedIds) ->
 loop(Socket, NodeId, TcpPort, RequestedIds) ->
     receive
         {udp, Socket, SrcIp, SrcPort, Data} ->
-            handle_message(Socket, SrcIp, SrcPort, binary_to_list(Data), NodeId, RequestedIds),
+            handle_message(Socket, SrcIp, SrcPort, binary_to_list(Data), NodeId, TcpPort, RequestedIds),
             loop(Socket, NodeId, TcpPort, RequestedIds);
         
         {get_id, From} ->
@@ -172,7 +176,7 @@ loop(Socket, NodeId, TcpPort, RequestedIds) ->
     end.
 
 % Maneja mensajes UDP recibidos
-handle_message(Socket, SrcIp, SrcPort, Message, MyNodeId, RequestedIds) ->
+handle_message(Socket, SrcIp, SrcPort, Message, MyNodeId, MyTcpPort, RequestedIds) ->
     case parse_message(Message) of
         {name_request, RequestedId} ->
             % Condicion 1: El ID solicitado coincide con nuestro ID actual
@@ -188,8 +192,30 @@ handle_message(Socket, SrcIp, SrcPort, Message, MyNodeId, RequestedIds) ->
             true ->
                 ok
             end;
+        {hello, NodeId, TcpPort} ->
+            case NodeId =:= MyNodeId of
+                true ->
+                    ok;
+                false ->
+                    case whereis(node_registry) of
+                        undefined -> ok;
+                        _Pid ->
+                            node_registry:add_node(NodeId, SrcIp, TcpPort),
+                            io:format("Nodo descubierto: ~s (~p:~w)~n", [NodeId, SrcIp, TcpPort])
+                    end,
+                    maybe_reply_hello(Socket, SrcIp, SrcPort, MyNodeId, MyTcpPort)
+            end;
         _ ->
             ok
+    end.
+
+maybe_reply_hello(Socket, SrcIp, SrcPort, MyNodeId, MyTcpPort) ->
+    case SrcPort =:= ?UDP_PORT of
+        true ->
+            ok;
+        false ->
+            Reply = io_lib:format("HELLO ~s ~w\n", [MyNodeId, MyTcpPort]),
+            gen_udp:send(Socket, SrcIp, ?UDP_PORT, Reply)
     end.
 
 % Parsea los mensajes UDP
@@ -199,6 +225,11 @@ parse_message(Message) ->
             {name_request, Id};
         ["INVALID_NAME", Id] ->
             {invalid_name, Id};
+        ["HELLO", Id, TcpPortStr] ->
+            case string:to_integer(TcpPortStr) of
+                {TcpPort, _} -> {hello, Id, TcpPort};
+                _ -> {unknown, Message}
+            end;
         _ ->
             {unknown, Message}
     end.
