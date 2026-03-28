@@ -75,6 +75,7 @@ is_download_request(RequestStr) ->
     Msg = string:trim(RequestStr),
     case string:tokens(Msg, " ") of
         ["DOWNLOAD_REQUEST" | _] -> true;
+        ["DOWNLOAD_CHUNK" | _] -> true;
         _ -> false
     end.
 
@@ -105,8 +106,8 @@ handle_search_request(Socket, Pattern) ->
     Files = file_manager:search_files(Pattern),
     
     lists:foreach(fun({FileName, Size}) ->
-        % Respuesta de búsqueda: NodeId, Archivo, Tamaño
-        Response = io_lib:format("SEARCH_RESPONSE ~s ~s ~p~n", [MyNodeId, FileName, Size]),
+        Status = format_chunk_status(file_manager:get_available_chunks(FileName)),
+        Response = io_lib:format("SEARCH_RESPONSE ~s ~s ~p ~s~n", [MyNodeId, FileName, Size, Status]),
         gen_tcp:send(Socket, Response)
     end, Files).
 
@@ -124,8 +125,8 @@ handle_chunk_request(Socket, FileName, ChunkId) ->
     case get_chunk_data(FileName, ChunkId) of
         {ok, Data} ->
             Size = byte_size(Data),
-            Hash = crypto:hash(sha256, Data),
-            Msg = <<101, Size:32/integer-big, Hash:32/binary, Data/binary>>,
+            % Para la descarga por chunk se envia solo el fragmento pedido.
+            Msg = <<101, Size:32/integer-big, Data/binary>>,
             gen_tcp:send(Socket, Msg);
         {error, not_found} ->
             gen_tcp:send(Socket, <<112>>)
@@ -151,7 +152,7 @@ get_chunk_data(FileName, ChunkId) ->
 
 % Extrae un chunk de un archivo completo
 extract_chunk_from_file(FileData, ChunkId) ->
-    ChunkSize = 4194304,
+    ChunkSize = ?CHUNK_SIZE,
     Offset = ChunkId * ChunkSize,
     TotalSize = byte_size(FileData),
     
@@ -168,23 +169,24 @@ extract_chunk_from_file(FileData, ChunkId) ->
     end.
 
 send_file(Socket, Data, Size) ->
-    MB = 1024 * 1024,
     Code = <<101>>,
     SizeBin = <<Size:32/integer-big>>,
-    Hash = crypto:hash(sha256, Data),
     
     if
-        Size >= (MB * 4) ->
-            ChunkSize = 4 * 1024 * 1024,  % 4MB chunks
-            Msg = <<Code/binary, SizeBin/binary, Hash:32/binary, ChunkSize:32/integer-big>>,
+        % El protocolo base usa chunks solo cuando el archivo supera los 4MB.
+        Size > ?LARGE_FILE_THRESHOLD ->
+            % Para el DOWNLOAD_REQUEST base se usa un tamaño de transferencia
+            % compatible con el campo de 16 bits del protocolo.
+            TransferChunkSize = transfer_chunk_size(),
+            Msg = <<Code/binary, SizeBin/binary, TransferChunkSize:32/integer-big>>,
             case gen_tcp:send(Socket, Msg) of
                 ok -> 
-                    send_chunks(Socket, Data, 0);
+                    send_chunks(Socket, Data, 0, TransferChunkSize);
                 {error, Reason} ->
                     {error, Reason}
             end;
         true ->
-            Msg = <<Code/binary, SizeBin/binary, Hash:32/binary, Data/binary>>,
+            Msg = <<Code/binary, SizeBin/binary, Data/binary>>,
             case gen_tcp:send(Socket, Msg) of
                 ok -> ok;
                 {error, Reason} ->
@@ -192,24 +194,25 @@ send_file(Socket, Data, Size) ->
             end
     end.
 
-% Envia archivo en chunks de 4MB (mismo tamaño que chunks lógicos)
-send_chunks(Socket, Data, ChunkIndex) ->
-    ChunkSize = 4 * 1024 * 1024,  % 4MB para máxima eficiencia
+% Envia archivo grande como secuencia de chunks compatibles con el
+% campo de tamaño real de 16 bits del protocolo base.
+send_chunks(Socket, Data, ChunkIndex, ChunkSize) ->
     DataSize = byte_size(Data),
     
     if
         DataSize >= ChunkSize ->
             <<Chunk:ChunkSize/binary, Rest/binary>> = Data,
-            Msg = <<111, ChunkIndex:16/integer-big, ChunkSize:32/integer-big, Chunk/binary>>,
+            % El tamaño real de cada chunk se envía en 16 bits como indica el TP.
+            Msg = <<111, ChunkIndex:16/integer-big, ChunkSize:16/integer-big, Chunk/binary>>,
             case gen_tcp:send(Socket, Msg) of
                 ok ->
-                    send_chunks(Socket, Rest, ChunkIndex + 1);
+                    send_chunks(Socket, Rest, ChunkIndex + 1, ChunkSize);
                 {error, Reason} ->
                     {error, Reason}
             end;
         DataSize > 0 ->
             % Ultimo chunk (menor a 4MB)
-            Msg = <<111, ChunkIndex:16/integer-big, DataSize:32/integer-big, Data/binary>>,
+            Msg = <<111, ChunkIndex:16/integer-big, DataSize:16/integer-big, Data/binary>>,
             case gen_tcp:send(Socket, Msg) of
                 ok -> ok;
                 {error, Reason} ->
@@ -218,6 +221,17 @@ send_chunks(Socket, Data, ChunkIndex) ->
         true ->
             ok
     end.
+
+transfer_chunk_size() ->
+    65535.
+
+format_chunk_status({complete, _TotalChunks}) ->
+    "COMPLETE";
+format_chunk_status({partial, ChunkIds}) ->
+    ChunkText = string:join([integer_to_list(Id) || Id <- ChunkIds], ","),
+    "CHUNKS:" ++ ChunkText;
+format_chunk_status(not_found) ->
+    "COMPLETE".
 
 % Obtiene el NodeId del proceso p2p_node
 get_node_id() ->

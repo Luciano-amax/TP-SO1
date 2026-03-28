@@ -1,7 +1,8 @@
 -module(download_manager).
--export([start/0, stop/0, init_download/4, mark_chunk_complete/2, 
-         get_progress/1, get_missing_chunks/1, get_chunk_sources/2,
-         assign_chunk/2, is_complete/1, get_download_state/1]).
+-export([start/0, stop/0, init_download/4, mark_chunk_complete/2,
+         mark_chunk_failed/2, get_progress/1, get_missing_chunks/1,
+         get_chunk_sources/2, assign_chunk/2, is_complete/1,
+         get_download_state/1]).
 
 -include("config.hrl").
 
@@ -51,6 +52,16 @@ mark_chunk_complete(FileName, ChunkId) ->
             ok;  % Download_manager ya no existe, ignorar
         Pid when is_pid(Pid) ->
             Pid ! {mark_complete, FileName, ChunkId},
+            ok
+    end.
+
+% Si un chunk falla, vuelve a pending para poder reintentarlo.
+mark_chunk_failed(FileName, ChunkId) ->
+    case whereis(download_manager) of
+        undefined ->
+            ok;
+        Pid when is_pid(Pid) ->
+            Pid ! {mark_failed, FileName, ChunkId},
             ok
     end.
 
@@ -145,6 +156,21 @@ loop(Downloads) ->
                     Progress = calculate_progress(NewState),
                     io:format("Chunk ~p completo (~.1f%)~n", [ChunkId, Progress]),
                     
+                    loop(maps:put(FileName, NewState, Downloads));
+                error ->
+                    loop(Downloads)
+            end;
+
+        {mark_failed, FileName, ChunkId} ->
+            case maps:find(FileName, Downloads) of
+                {ok, State} ->
+                    % Si una descarga falla, el chunk se libera para otro intento.
+                    NewChunksStatus = maps:update(ChunkId, pending, State#download_state.chunks_status),
+                    NewActiveDownloads = maps:remove(ChunkId, State#download_state.active_downloads),
+                    NewState = State#download_state{
+                        chunks_status = NewChunksStatus,
+                        active_downloads = NewActiveDownloads
+                    },
                     loop(maps:put(FileName, NewState, Downloads));
                 error ->
                     loop(Downloads)

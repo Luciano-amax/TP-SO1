@@ -2,7 +2,7 @@
 -include("config.hrl").
 -export([download_from_node/2, download_multi_source/1]).
 
-% Descarga un archivo desde un nodo específico
+% Descarga simple desde un nodo puntual usando el protocolo base.
 download_from_node(FileName, NodeId) ->
     case node_registry:get_node(NodeId) of
         {ok, {_Id, Ip, Port}} ->
@@ -14,7 +14,6 @@ download_from_node(FileName, NodeId) ->
 connect_and_download(Ip, Port, FileName) ->
     case gen_tcp:connect(Ip, Port, [binary, {active, false}, {reuseaddr, true}], 5000) of
         {ok, Socket} ->
-            % Monitoreamos el socket para detectar desconexiones
             Request = io_lib:format("DOWNLOAD_REQUEST ~s~n", [FileName]),
             case gen_tcp:send(Socket, Request) of
                 ok ->
@@ -39,71 +38,11 @@ connect_and_download(Ip, Port, FileName) ->
 
 receive_file(Socket, FileName) ->
     case gen_tcp:recv(Socket, 1, 5000) of
-        {ok, <<101>>} ->
+        {ok, <<?CODE_OK>>} ->
             case gen_tcp:recv(Socket, 4, 5000) of
                 {ok, SizeBin} ->
                     <<Size:32/integer-big>> = SizeBin,
-                    
-                    % Hash SHA256 (32 bytes) - Mejora §5.3
-                    % Timeout 2s: detecta si hay hash disponible
-                    MB = 1024 * 1024,
-                    case gen_tcp:recv(Socket, 32, 2000) of
-                        {ok, ExpectedHash} when byte_size(ExpectedHash) == 32 ->
-                            % Archivo con verificación de integridad
-                            if
-                                Size > (MB * 4) ->
-                                    case gen_tcp:recv(Socket, 4, 5000) of
-                                        {ok, <<_ChunkSize:32/integer-big>>} ->
-                                            receive_chunks(Socket, FileName, ExpectedHash);
-                                        {error, ChunkReason} ->
-                                            io:format("Error metadata: ~p~n", [ChunkReason]),
-                                            {error, chunk_metadata_failed}
-                                    end;
-                                true ->
-                                    case gen_tcp:recv(Socket, Size, 30000) of
-                                        {ok, Data} ->
-                                            save_file(FileName, Data),
-                                            verify_integrity(FileName, Data, ExpectedHash);
-                                        {error, closed} ->
-                                            io:format("Conexion cerrada~n"),
-                                            {error, connection_closed};
-                                        {error, timeout} ->
-                                            io:format("Timeout~n"),
-                                            {error, download_timeout};
-                                        {error, Reason} ->
-                                            io:format("Error recepcion: ~p~n", [Reason]),
-                                            {error, Reason}
-                                    end
-                            end;
-                        _ ->
-                            % Archivo sin verificación de integridad
-                            if
-                                Size > (MB * 4) ->
-                                    case gen_tcp:recv(Socket, 4, 5000) of
-                                        {ok, <<_ChunkSize:32/integer-big>>} ->
-                                            receive_chunks_no_hash(Socket, FileName);
-                                        {error, ChunkReason} ->
-                                            io:format("Error metadata: ~p~n", [ChunkReason]),
-                                            {error, chunk_metadata_failed}
-                                    end;
-                                true ->
-                                    case gen_tcp:recv(Socket, Size, 30000) of
-                                        {ok, Data} ->
-                                            save_file(FileName, Data),
-                                            io:format("Descarga completa: ~s~n", [FileName]),
-                                            {ok, FileName};
-                                        {error, closed} ->
-                                            io:format("Conexion cerrada~n"),
-                                            {error, connection_closed};
-                                        {error, timeout} ->
-                                            io:format("Timeout~n"),
-                                            {error, download_timeout};
-                                        {error, Reason} ->
-                                            io:format("Error recepcion: ~p~n", [Reason]),
-                                            {error, Reason}
-                                    end
-                            end
-                    end;
+                    receive_file_payload(Socket, FileName, Size);
                 {error, closed} ->
                     io:format("Conexion cerrada~n"),
                     {error, connection_closed};
@@ -111,7 +50,7 @@ receive_file(Socket, FileName) ->
                     io:format("Error: ~p~n", [Reason]),
                     {error, Reason}
             end;
-        {ok, <<112>>} ->
+        {ok, <<?CODE_NOTFOUND>>} ->
             io:format("Archivo no disponible~n"),
             {error, file_not_found};
         {ok, Other} ->
@@ -125,8 +64,39 @@ receive_file(Socket, FileName) ->
             {error, Reason}
     end.
 
-% Recibe chunks sin hash
-receive_chunks_no_hash(Socket, FileName) ->
+% La descarga simple sigue el protocolo base del enunciado.
+receive_file_payload(Socket, FileName, Size) ->
+    if
+        Size > ?LARGE_FILE_THRESHOLD ->
+            case gen_tcp:recv(Socket, 4, 5000) of
+                {ok, <<_TransferChunkSize:32/integer-big>>} ->
+                    receive_chunked_file(Socket, FileName);
+                {error, ChunkReason} ->
+                    io:format("Error metadata: ~p~n", [ChunkReason]),
+                    {error, chunk_metadata_failed}
+            end;
+        true ->
+            receive_small_file(Socket, FileName, Size)
+    end.
+
+receive_small_file(Socket, FileName, Size) ->
+    case gen_tcp:recv(Socket, Size, 30000) of
+        {ok, Data} ->
+            save_file(FileName, Data),
+            io:format("Descarga completa: ~s~n", [FileName]),
+            {ok, FileName};
+        {error, closed} ->
+            io:format("Conexion cerrada~n"),
+            {error, connection_closed};
+        {error, timeout} ->
+            io:format("Timeout~n"),
+            {error, download_timeout};
+        {error, Reason} ->
+            io:format("Error recepcion: ~p~n", [Reason]),
+            {error, Reason}
+    end.
+
+receive_chunked_file(Socket, FileName) ->
     FilePath = filename:join(?DOWNLOAD_DIR, FileName),
     file:delete(FilePath),
     case receive_chunks_loop(Socket, FilePath) of
@@ -137,30 +107,14 @@ receive_chunks_no_hash(Socket, FileName) ->
             Error
     end.
 
-receive_chunks(Socket, FileName, ExpectedHash) ->
-    FilePath = filename:join(?DOWNLOAD_DIR, FileName),
-    file:delete(FilePath),
-    case receive_chunks_loop(Socket, FilePath) of
-        {ok, _} ->
-            case file:read_file(FilePath) of
-                {ok, Data} ->
-                    verify_integrity(FileName, Data, ExpectedHash);
-                {error, ReadReason} ->
-                    io:format("Error leyendo: ~p~n", [ReadReason]),
-                    {error, verification_read_failed}
-            end;
-        Error ->
-            Error
-    end.
-
 receive_chunks_loop(Socket, FilePath) ->
     case gen_tcp:recv(Socket, 1, 5000) of
-        {ok, <<111>>} ->
+        {ok, <<?CODE_CHUNK>>} ->
             case gen_tcp:recv(Socket, 2, 5000) of
                 {ok, _IndexBin} ->
-                    case gen_tcp:recv(Socket, 4, 5000) of
+                    case gen_tcp:recv(Socket, 2, 5000) of
                         {ok, ChunkSizeBin} ->
-                            <<ChunkSize:32/integer-big>> = ChunkSizeBin,
+                            <<ChunkSize:16/integer-big>> = ChunkSizeBin,
                             case gen_tcp:recv(Socket, ChunkSize, 30000) of
                                 {ok, ChunkData} ->
                                     file:write_file(FilePath, ChunkData, [append]),
@@ -205,43 +159,23 @@ save_file(FileName, Data) ->
     filelib:ensure_dir(?DOWNLOAD_DIR ++ "/"),
     FilePath = filename:join(?DOWNLOAD_DIR, FileName),
     case file:write_file(FilePath, Data) of
-        ok ->
-            ok;
-        {error, Reason} ->
-            io:format("Error guardando: ~p~n", [Reason])
+        ok -> ok;
+        {error, Reason} -> io:format("Error guardando: ~p~n", [Reason])
     end.
 
-verify_integrity(FileName, Data, ExpectedHash) ->
-    ActualHash = crypto:hash(sha256, Data),
-    if
-        ActualHash =:= ExpectedHash ->
-            io:format("Descarga OK: ~s [VERIFICADO]~n", [FileName]),
-            {ok, FileName};
-        true ->
-            io:format("ADVERTENCIA: Hash no coincide para ~s~n", [FileName]),
-            io:format("  Esperado: ~s~n", [binary_to_hex(ExpectedHash)]),
-            io:format("  Obtenido: ~s~n", [binary_to_hex(ActualHash)]),
-            {error, checksum_mismatch}
-    end.
-
-% Convierte binario a string hexadecimal
-binary_to_hex(Bin) ->
-    lists:flatten([io_lib:format("~2.16.0B", [B]) || <<B>> <= Bin]).
-
-% Descarga multi-fuente con busqueda automatica
+% La descarga multi-fuente usa una extension minima del protocolo:
+% cada worker pide un chunk puntual con DOWNLOAD_CHUNK.
 download_multi_source(FileName) ->
     io:format("Buscando nodos con ~s...~n", [FileName]),
-    
     {ok, MyNodeId} = get_node_id(),
     Nodes = node_registry:get_all_nodes(),
-    
     Parent = self(),
+
     lists:foreach(fun({_NodeId, Ip, Port}) ->
         spawn(fun() -> search_in_node(Parent, MyNodeId, Ip, Port, FileName) end)
     end, Nodes),
-    
+
     SearchResults = collect_search_results(length(Nodes), []),
-    
     case SearchResults of
         [] ->
             io:format("Archivo no encontrado en la red~n"),
@@ -251,13 +185,11 @@ download_multi_source(FileName) ->
             start_multi_download(FileName, SearchResults)
     end.
 
-% Busca archivo en un nodo especifico
 search_in_node(Parent, MyNodeId, Ip, Port, FileName) ->
     case gen_tcp:connect(Ip, Port, [binary, {active, false}, {reuseaddr, true}], 2000) of
         {ok, Socket} ->
             Request = io_lib:format("SEARCH_REQUEST ~s ~s~n", [MyNodeId, FileName]),
             gen_tcp:send(Socket, Request),
-            
             Results = receive_search_responses(Socket, FileName, []),
             gen_tcp:close(Socket),
             Parent ! {search_result, Results};
@@ -265,7 +197,6 @@ search_in_node(Parent, MyNodeId, Ip, Port, FileName) ->
             Parent ! {search_result, []}
     end.
 
-% Recibe respuestas de busqueda
 receive_search_responses(Socket, FileName, Acc) ->
     case gen_tcp:recv(Socket, 0, 1000) of
         {ok, Data} ->
@@ -278,7 +209,6 @@ receive_search_responses(Socket, FileName, Acc) ->
             Acc
     end.
 
-% Parsea respuesta solo si coincide con el archivo buscado
 parse_search_for_file(Line, FileName) ->
     Tokens = string:tokens(string:trim(Line), " "),
     case Tokens of
@@ -301,7 +231,6 @@ parse_chunk_status("CHUNKS:" ++ ChunkList) ->
 parse_chunk_status(_) ->
     complete.
 
-% Recolecta resultados de busqueda
 collect_search_results(0, Results) ->
     Results;
 collect_search_results(Remaining, Results) ->
@@ -312,70 +241,58 @@ collect_search_results(Remaining, Results) ->
         Results
     end.
 
-% Inicia descarga desde multiples nodos
 start_multi_download(FileName, SearchResults) ->
     [{_, _, TotalSize, _} | _] = SearchResults,
-    ChunkSize = 4194304,
-    
+    ChunkSize = ?CHUNK_SIZE,
     download_manager:start(),
     {ok, _State} = download_manager:init_download(FileName, TotalSize, ChunkSize, SearchResults),
-    
-    % Calcular cantidad de workers: múltiples por nodo para descarga paralela real
+
     SourceNodes = extract_source_nodes(SearchResults),
-    WorkersPerNode = 4,  % 4 workers paralelos por nodo
+    WorkersPerNode = ?WORKERS_PER_NODE,
     TotalWorkers = length(SourceNodes) * WorkersPerNode,
-    
+
     io:format("Iniciando descarga paralela (~p nodos, ~p workers)~n", [length(SourceNodes), TotalWorkers]),
-    
+
     Parent = self(),
-    
-    % Lanzar múltiples workers por cada nodo para descargar chunks en paralelo
     lists:foreach(fun(NodeId) ->
         lists:foreach(fun(_) ->
             spawn(fun() -> download_worker(Parent, FileName, NodeId) end)
         end, lists:seq(1, WorkersPerNode))
     end, SourceNodes),
-    
+
     wait_for_completion(FileName, TotalWorkers).
 
-% Extrae lista de NodeIds unicos
 extract_source_nodes(SearchResults) ->
     lists:usort([NodeId || {NodeId, _, _, _} <- SearchResults]).
 
-% Trabajador que descarga chunks desde un nodo
-% Cada worker descarga múltiples chunks hasta que no haya más disponibles (paralelo real)
 download_worker(Parent, FileName, NodeId) ->
     case download_manager:assign_chunk(FileName, NodeId) of
         {ok, ChunkId} ->
-            % Descarga chunk asignado
             case download_chunk_from_node(FileName, ChunkId, NodeId) of
                 ok ->
                     download_manager:mark_chunk_complete(FileName, ChunkId),
-                    % Worker continúa pidiendo más chunks mientras haya disponibles
                     download_worker(Parent, FileName, NodeId);
                 {error, Reason} ->
+                    % El chunk fallido vuelve a pending para que se pueda reintentar.
+                    download_manager:mark_chunk_failed(FileName, ChunkId),
                     io:format("Error descargando chunk ~p desde ~s: ~p~n", [ChunkId, NodeId, Reason]),
                     Parent ! {worker_error, NodeId, ChunkId},
-                    % Reintenta con otro chunk
                     download_worker(Parent, FileName, NodeId)
             end;
         {error, no_chunks} ->
-            % No hay más chunks disponibles, worker termina
             Parent ! {worker_done, NodeId}
     end.
 
-% Descarga un chunk especifico desde un nodo
-% Usa DOWNLOAD_REQUEST completo pero solo guarda el chunk asignado
+% Esta rama se usa solamente en la descarga multi-fuente.
 download_chunk_from_node(FileName, ChunkId, NodeId) ->
     case node_registry:get_node(NodeId) of
         {ok, {_Id, Ip, Port}} ->
             case gen_tcp:connect(Ip, Port, [binary, {active, false}, {reuseaddr, true}], 5000) of
                 {ok, Socket} ->
-                    % Usa DOWNLOAD_REQUEST para bajar el archivo completo
-                    Request = io_lib:format("DOWNLOAD_REQUEST ~s~n", [FileName]),
+                    Request = io_lib:format("DOWNLOAD_CHUNK ~s ~p~n", [FileName, ChunkId]),
                     case gen_tcp:send(Socket, Request) of
                         ok ->
-                            Result = receive_and_extract_chunk(Socket, FileName, ChunkId),
+                            Result = receive_requested_chunk(Socket, FileName, ChunkId),
                             gen_tcp:close(Socket),
                             Result;
                         {error, SendReason} ->
@@ -389,165 +306,40 @@ download_chunk_from_node(FileName, ChunkId, NodeId) ->
             {error, node_not_found}
     end.
 
-% Recibe archivo completo y extrae el chunk asignado
-receive_and_extract_chunk(Socket, FileName, ChunkId) ->
-    % Simplemente descargamos el archivo completo usando receive_file
-    case receive_file_to_memory(Socket) of
-        {ok, FileData} ->
-            % Ahora extraemos solo el chunk que necesitamos
-            extract_and_save_chunk(FileName, ChunkId, FileData);
-        {error, Reason} ->
-            {error, Reason}
-    end.
-
-% Recibe archivo completo en memoria (sin guardarlo a disco)
-receive_file_to_memory(Socket) ->
+receive_requested_chunk(Socket, FileName, ChunkId) ->
     case gen_tcp:recv(Socket, 1, 5000) of
-        {ok, <<101>>} ->
+        {ok, <<?CODE_OK>>} ->
             case gen_tcp:recv(Socket, 4, 5000) of
                 {ok, SizeBin} ->
                     <<Size:32/integer-big>> = SizeBin,
-                    
-                    % Hash SHA256 (32 bytes) - Mejora §5.3
-                    % Timeout 2s: detecta si hay hash disponible
-                    MB = 1024 * 1024,
-                    case gen_tcp:recv(Socket, 32, 2000) of
-                        {ok, ExpectedHash} when byte_size(ExpectedHash) == 32 ->
-                            % Archivo con hash
-                            receive_full_file_data(Socket, Size, MB, ExpectedHash);
-                        _ ->
-                            % Archivo sin hash
-                            receive_full_file_data(Socket, Size, MB, no_hash)
-                    end;
-                {error, Reason} ->
-                    {error, Reason}
-            end;
-        {ok, <<112>>} ->
-            {error, file_not_found};
-        {error, Reason} ->
-            {error, Reason}
-    end.
-
-% Recibe el contenido completo del archivo en memoria
-receive_full_file_data(Socket, Size, MB, ExpectedHash) ->
-    if
-        Size > (MB * 4) ->
-            % Archivo grande: recibir chunks de 1MB del servidor
-            case gen_tcp:recv(Socket, 4, 5000) of
-                {ok, <<_ServerChunkSize:32/integer-big>>} ->
-                    receive_all_chunks(Socket, <<>>, ExpectedHash);
-                {error, Reason} ->
-                    {error, Reason}
-            end;
-        true ->
-            % Archivo pequeño: recibir todo de una vez
-            case gen_tcp:recv(Socket, Size, 30000) of
-                {ok, Data} ->
-                    % Verificar hash solo si está disponible
-                    case ExpectedHash of
-                        no_hash ->
-                            {ok, Data};
-                        _ ->
-                            ActualHash = crypto:hash(sha256, Data),
-                            if
-                                ActualHash =:= ExpectedHash ->
-                                    {ok, Data};
-                                true ->
-                                    {error, hash_mismatch}
-                            end
-                    end;
-                {error, Reason} ->
-                    {error, Reason}
-            end
-    end.
-
-% Recibe todos los chunks del servidor y los concatena
-receive_all_chunks(Socket, Acc, ExpectedHash) ->
-    case gen_tcp:recv(Socket, 1, 5000) of
-        {ok, <<111>>} ->
-            case gen_tcp:recv(Socket, 2, 5000) of
-                {ok, _IndexBin} ->
-                    case gen_tcp:recv(Socket, 4, 5000) of
-                        {ok, ChunkSizeBin} ->
-                            <<ChunkSize:32/integer-big>> = ChunkSizeBin,
-                            case gen_tcp:recv(Socket, ChunkSize, 30000) of
-                                {ok, ChunkData} ->
-                                    NewAcc = <<Acc/binary, ChunkData/binary>>,
-                                    receive_all_chunks(Socket, NewAcc, ExpectedHash);
-                                {error, Reason} ->
-                                    {error, Reason}
-                            end;
+                    case gen_tcp:recv(Socket, Size, 30000) of
+                        {ok, ChunkData} ->
+                            save_chunk(FileName, ChunkId, ChunkData),
+                            ok;
                         {error, Reason} ->
                             {error, Reason}
                     end;
                 {error, Reason} ->
                     {error, Reason}
             end;
-        {error, timeout} ->
-            % Fin del stream - verificar hash si está disponible
-            case ExpectedHash of
-                no_hash ->
-                    {ok, Acc};
-                _ ->
-                    ActualHash = crypto:hash(sha256, Acc),
-                    if
-                        ActualHash =:= ExpectedHash ->
-                            {ok, Acc};
-                        true ->
-                            {error, hash_mismatch}
-                    end
-            end;
-        {error, closed} ->
-            % Socket cerrado - verificar hash si está disponible
-            case ExpectedHash of
-                no_hash ->
-                    {ok, Acc};
-                _ ->
-                    ActualHash = crypto:hash(sha256, Acc),
-                    if
-                        ActualHash =:= ExpectedHash ->
-                            {ok, Acc};
-                        true ->
-                            {error, hash_mismatch}
-                    end
-            end;
+        {ok, <<?CODE_NOTFOUND>>} ->
+            {error, file_not_found};
+        {ok, Other} ->
+            io:format("Respuesta invalida para chunk ~p: ~p~n", [ChunkId, Other]),
+            {error, invalid_chunk_response};
         {error, Reason} ->
             {error, Reason}
     end.
 
-% Extrae el chunk específico del archivo completo y lo guarda
-extract_and_save_chunk(FileName, ChunkId, FileData) ->
-    ChunkSize = 4194304,
-    Offset = ChunkId * ChunkSize,
-    TotalSize = byte_size(FileData),
-    
-    if
-        Offset >= TotalSize ->
-            {error, chunk_out_of_bounds};
-        Offset + ChunkSize =< TotalSize ->
-            <<_:Offset/binary, ChunkData:ChunkSize/binary, _/binary>> = FileData,
-            save_chunk(FileName, ChunkId, ChunkData),
-            ok;
-        true ->
-            % Último chunk (menor a 4MB)
-            RemainingSize = TotalSize - Offset,
-            <<_:Offset/binary, ChunkData:RemainingSize/binary>> = FileData,
-            save_chunk(FileName, ChunkId, ChunkData),
-            ok
-    end.
-
-% Guarda un chunk en disco
 save_chunk(FileName, ChunkId, Data) ->
     ChunkDir = filename:join(?DOWNLOAD_DIR, "chunks"),
     filelib:ensure_dir(ChunkDir ++ "/"),
     ChunkPath = filename:join(ChunkDir, io_lib:format("~s.chunk~p", [FileName, ChunkId])),
     file:write_file(ChunkPath, Data).
 
-% Espera a que terminen todos los workers
 wait_for_completion(FileName, RemainingWorkers) ->
     case download_manager:is_complete(FileName) of
         {ok, true} ->
-            % Todos los chunks bajados, ahora ensambla el archivo
             io:format("~nTodos los chunks descargados, ensamblando...~n"),
             case assemble_file(FileName) of
                 ok ->
@@ -571,13 +363,11 @@ wait_for_completion(FileName, RemainingWorkers) ->
             end
     end.
 
-% Ensambla el archivo final juntando todos los chunks
 assemble_file(FileName) ->
     ChunkDir = filename:join(?DOWNLOAD_DIR, "chunks"),
     Pattern = filename:join(ChunkDir, FileName ++ ".chunk*"),
     ChunkFiles = filelib:wildcard(Pattern),
-    
-    % Lee y ordena chunks por ID (0, 1, 2, ...)
+
     ChunkData = lists:sort(lists:filtermap(fun(File) ->
         case parse_chunk_id(File) of
             {ok, Id} ->
@@ -587,34 +377,29 @@ assemble_file(FileName) ->
                 false
         end
     end, ChunkFiles)),
-    
-    % Concatena en orden correcto
+
     FinalPath = filename:join(?DOWNLOAD_DIR, FileName),
     {ok, OutFile} = file:open(FinalPath, [write, binary]),
-    
+
     lists:foreach(fun({_Id, Data}) ->
         file:write(OutFile, Data)
     end, ChunkData),
-    
+
     file:close(OutFile),
-    
-    % Limpia chunks temporales
+
     lists:foreach(fun(ChunkFile) ->
         file:delete(ChunkFile)
     end, ChunkFiles),
-    
+
     io:format("Archivo ensamblado: ~s~n", [FileName]),
     ok.
 
-% Verifica integridad del archivo ensamblado
 verify_assembled_file(FileName) ->
     FinalPath = filename:join(?DOWNLOAD_DIR, FileName),
     case file:read_file(FinalPath) of
-        {ok, Data} ->
-            ActualHash = crypto:hash(sha256, Data),
+        {ok, _Data} ->
             io:format("Archivo descargado: ~s~n", [FileName]),
-            io:format("Hash SHA256: ~s~n", [binary_to_hex(ActualHash)]),
-            io:format("Descarga completada [VERIFICADO]~n");
+            io:format("Descarga completada~n");
         {error, Reason} ->
             io:format("Error verificando archivo: ~p~n", [Reason])
     end.
@@ -632,7 +417,8 @@ parse_chunk_id(FilePath) ->
 
 get_node_id() ->
     case whereis(p2p_node) of
-        undefined -> {ok, "unknown"};
+        undefined ->
+            {ok, "unknown"};
         Pid ->
             case process_info(Pid, dictionary) of
                 {dictionary, Dict} ->
@@ -640,7 +426,7 @@ get_node_id() ->
                         undefined -> {ok, "unknown"};
                         NodeId -> {ok, NodeId}
                     end;
-                _ -> {ok, "unknown"}
+                _ ->
+                    {ok, "unknown"}
             end
     end.
-

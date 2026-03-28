@@ -114,7 +114,9 @@ get_available_chunks(FileName) ->
     case filelib:is_regular(CompletePath) of
         true ->
             Size = filelib:file_size(CompletePath),
-            TotalChunks = calculate_total_chunks(Size, 4194304),
+            % Si el archivo esta en compartida, el nodo dispone del
+            % archivo completo y por lo tanto de todos sus chunks.
+            TotalChunks = calculate_total_chunks(Size, ?CHUNK_SIZE),
             {complete, TotalChunks};
         false ->
             ChunkDir = filename:join(?DOWNLOAD_DIR, "chunks"),
