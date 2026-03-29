@@ -12,7 +12,7 @@ download_from_node(FileName, NodeId) ->
     end.
 
 connect_and_download(Ip, Port, FileName) ->
-    case gen_tcp:connect(Ip, Port, [binary, {active, false}, {reuseaddr, true}], 5000) of
+    case gen_tcp:connect(Ip, Port, [binary, {active, false}, {reuseaddr, true}], ?TCP_CONNECT_TIMEOUT) of
         {ok, Socket} ->
             Request = io_lib:format("DOWNLOAD_REQUEST ~s~n", [FileName]),
             case gen_tcp:send(Socket, Request) of
@@ -37,9 +37,9 @@ connect_and_download(Ip, Port, FileName) ->
     end.
 
 receive_file(Socket, FileName) ->
-    case gen_tcp:recv(Socket, 1, 5000) of
+    case gen_tcp:recv(Socket, 1, ?TCP_HEADER_TIMEOUT) of
         {ok, <<?CODE_OK>>} ->
-            case gen_tcp:recv(Socket, 4, 5000) of
+            case gen_tcp:recv(Socket, 4, ?TCP_HEADER_TIMEOUT) of
                 {ok, SizeBin} ->
                     <<Size:32/integer-big>> = SizeBin,
                     receive_file_payload(Socket, FileName, Size);
@@ -68,7 +68,7 @@ receive_file(Socket, FileName) ->
 receive_file_payload(Socket, FileName, Size) ->
     if
         Size > ?LARGE_FILE_THRESHOLD ->
-            case gen_tcp:recv(Socket, 4, 5000) of
+            case gen_tcp:recv(Socket, 4, ?TCP_HEADER_TIMEOUT) of
                 {ok, <<_TransferChunkSize:32/integer-big>>} ->
                     receive_chunked_file(Socket, FileName);
                 {error, ChunkReason} ->
@@ -108,11 +108,11 @@ receive_chunked_file(Socket, FileName) ->
     end.
 
 receive_chunks_loop(Socket, FilePath) ->
-    case gen_tcp:recv(Socket, 1, 5000) of
+    case gen_tcp:recv(Socket, 1, ?TCP_HEADER_TIMEOUT) of
         {ok, <<?CODE_CHUNK>>} ->
-            case gen_tcp:recv(Socket, 2, 5000) of
+            case gen_tcp:recv(Socket, 2, ?TCP_HEADER_TIMEOUT) of
                 {ok, _IndexBin} ->
-                    case gen_tcp:recv(Socket, 2, 5000) of
+                    case gen_tcp:recv(Socket, 2, ?TCP_HEADER_TIMEOUT) of
                         {ok, ChunkSizeBin} ->
                             <<ChunkSize:16/integer-big>> = ChunkSizeBin,
                             case gen_tcp:recv(Socket, ChunkSize, ?CHUNK_TIMEOUT) of
@@ -186,7 +186,7 @@ download_multi_source(FileName) ->
     end.
 
 search_in_node(Parent, MyNodeId, Ip, Port, FileName) ->
-    case gen_tcp:connect(Ip, Port, [binary, {active, false}, {reuseaddr, true}], 2000) of
+    case gen_tcp:connect(Ip, Port, [binary, {active, false}, {reuseaddr, true}], ?SEARCH_TIMEOUT) of
         {ok, Socket} ->
             Request = io_lib:format("SEARCH_REQUEST ~s ~s~n", [MyNodeId, FileName]),
             gen_tcp:send(Socket, Request),
@@ -277,7 +277,13 @@ download_worker(Parent, FileName, NodeId) ->
                     download_manager:mark_chunk_failed(FileName, ChunkId),
                     io:format("Error descargando chunk ~p desde ~s: ~p~n", [ChunkId, NodeId, Reason]),
                     Parent ! {worker_error, NodeId, ChunkId},
-                    download_worker(Parent, FileName, NodeId)
+                    case should_stop_worker(Reason) of
+                        true ->
+                            io:format("Worker ~s detenido: nodo no disponible~n", [NodeId]),
+                            Parent ! {worker_done, NodeId};
+                        false ->
+                            download_worker(Parent, FileName, NodeId)
+                    end
             end;
         {error, no_chunks} ->
             Parent ! {worker_done, NodeId}
@@ -287,7 +293,7 @@ download_worker(Parent, FileName, NodeId) ->
 download_chunk_from_node(FileName, ChunkId, NodeId) ->
     case node_registry:get_node(NodeId) of
         {ok, {_Id, Ip, Port}} ->
-            case gen_tcp:connect(Ip, Port, [binary, {active, false}, {reuseaddr, true}], 5000) of
+            case gen_tcp:connect(Ip, Port, [binary, {active, false}, {reuseaddr, true}], ?TCP_CONNECT_TIMEOUT) of
                 {ok, Socket} ->
                     Request = io_lib:format("DOWNLOAD_CHUNK ~s ~p~n", [FileName, ChunkId]),
                     case gen_tcp:send(Socket, Request) of
@@ -307,9 +313,9 @@ download_chunk_from_node(FileName, ChunkId, NodeId) ->
     end.
 
 receive_requested_chunk(Socket, FileName, ChunkId) ->
-    case gen_tcp:recv(Socket, 1, 5000) of
+    case gen_tcp:recv(Socket, 1, ?TCP_HEADER_TIMEOUT) of
         {ok, <<?CODE_OK>>} ->
-            case gen_tcp:recv(Socket, 4, 5000) of
+            case gen_tcp:recv(Socket, 4, ?TCP_HEADER_TIMEOUT) of
                 {ok, SizeBin} ->
                     <<Size:32/integer-big>> = SizeBin,
                     case gen_tcp:recv(Socket, Size, ?CHUNK_TIMEOUT) of
@@ -459,7 +465,7 @@ get_expected_checksum(FileName, [NodeId | Rest]) ->
     end.
 
 request_remote_checksum(Ip, Port, FileName) ->
-    case gen_tcp:connect(Ip, Port, [binary, {active, false}, {reuseaddr, true}], 5000) of
+    case gen_tcp:connect(Ip, Port, [binary, {active, false}, {reuseaddr, true}], ?TCP_CONNECT_TIMEOUT) of
         {ok, Socket} ->
             Request = io_lib:format("CHECKSUM_REQUEST ~s~n", [FileName]),
             case gen_tcp:send(Socket, Request) of
@@ -490,6 +496,21 @@ parse_checksum_response({error, Reason}) ->
 
 binary_to_hex(Bin) ->
     lists:flatten([io_lib:format("~2.16.0B", [Byte]) || <<Byte>> <= Bin]).
+
+should_stop_worker(node_not_found) ->
+    true;
+should_stop_worker(connection_refused) ->
+    true;
+should_stop_worker(connection_closed) ->
+    true;
+should_stop_worker(connection_closed_during_chunk) ->
+    true;
+should_stop_worker(connection_timeout) ->
+    true;
+should_stop_worker(econnrefused) ->
+    true;
+should_stop_worker(_) ->
+    false.
 
 parse_chunk_id(FilePath) ->
     BaseName = filename:basename(FilePath),

@@ -41,7 +41,7 @@ init_download(FileName, TotalSize, ChunkSize, SearchResults) ->
     download_manager ! {init_download, FileName, TotalSize, ChunkSize, SearchResults, self()},
     receive
         {download_initialized, State} -> {ok, State}
-    after 5000 ->
+    after ?PROCESS_REPLY_TIMEOUT ->
         {error, timeout}
     end.
 
@@ -71,7 +71,7 @@ assign_chunk(FileName, NodeId) ->
     receive
         {chunk_assigned, ChunkId} -> {ok, ChunkId};
         {no_chunks_available} -> {error, no_chunks}
-    after 5000 ->
+    after ?PROCESS_REPLY_TIMEOUT ->
         {error, timeout}
     end.
 
@@ -80,7 +80,7 @@ get_progress(FileName) ->
     download_manager ! {get_progress, FileName, self()},
     receive
         {progress, Percent} -> {ok, Percent}
-    after 5000 ->
+    after ?PROCESS_REPLY_TIMEOUT ->
         {error, timeout}
     end.
 
@@ -89,7 +89,7 @@ get_missing_chunks(FileName) ->
     download_manager ! {get_missing, FileName, self()},
     receive
         {missing_chunks, Chunks} -> {ok, Chunks}
-    after 5000 ->
+    after ?PROCESS_REPLY_TIMEOUT ->
         {error, timeout}
     end.
 
@@ -98,7 +98,7 @@ get_chunk_sources(FileName, ChunkId) ->
     download_manager ! {get_sources, FileName, ChunkId, self()},
     receive
         {chunk_sources, Sources} -> {ok, Sources}
-    after 5000 ->
+    after ?PROCESS_REPLY_TIMEOUT ->
         {error, timeout}
     end.
 
@@ -107,7 +107,7 @@ is_complete(FileName) ->
     download_manager ! {is_complete, FileName, self()},
     receive
         {complete_status, Status} -> {ok, Status}
-    after 5000 ->
+    after ?PROCESS_REPLY_TIMEOUT ->
         {error, timeout}
     end.
 
@@ -117,7 +117,7 @@ get_download_state(FileName) ->
     receive
         {download_state, State} -> {ok, State};
         {not_found} -> {error, not_found}
-    after 5000 ->
+    after ?PROCESS_REPLY_TIMEOUT ->
         {error, timeout}
     end.
 

@@ -21,6 +21,9 @@
 -define(SEARCH_TIMEOUT, 5000).
 -define(DOWNLOAD_TIMEOUT, 180000).
 -define(CHUNK_TIMEOUT, 15000).
+-define(TCP_CONNECT_TIMEOUT, 8000).
+-define(TCP_HEADER_TIMEOUT, 8000).
+-define(PROCESS_REPLY_TIMEOUT, 5000).
 
 %% Protocolo
 -define(CHUNK_SIZE, 4194304).
@@ -35,6 +38,9 @@
 %% Direcciones de broadcast
 -define(BROADCAST_ADDR, {255, 255, 255, 255}).
 -define(BROADCAST_OPEN, {0, 0, 0, 0}).
+
+%% Salida por consola
+-define(SHOW_DISCOVERY_LOGS, false).
 
 %% Generación de IDs
 -define(NODE_ID_CHARS, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789").

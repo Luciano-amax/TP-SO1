@@ -200,8 +200,9 @@ handle_message(Socket, SrcIp, SrcPort, Message, MyNodeId, MyTcpPort, RequestedId
                     case whereis(node_registry) of
                         undefined -> ok;
                         _Pid ->
+                            MaybeLog = should_log_discovery(NodeId, SrcIp, TcpPort),
                             node_registry:add_node(NodeId, SrcIp, TcpPort),
-                            io:format("Nodo descubierto: ~s (~p:~w)~n", [NodeId, SrcIp, TcpPort])
+                            maybe_print_discovery(NodeId, SrcIp, TcpPort, MaybeLog)
                     end,
                     maybe_reply_hello(Socket, SrcIp, SrcPort, MyNodeId, MyTcpPort)
             end;
@@ -233,3 +234,21 @@ parse_message(Message) ->
         _ ->
             {unknown, Message}
     end.
+
+should_log_discovery(NodeId, SrcIp, TcpPort) ->
+    case ?SHOW_DISCOVERY_LOGS of
+        false ->
+            false;
+        true ->
+            case node_registry:get_node(NodeId) of
+                {ok, {_Id, OldIp, OldPort}} ->
+                    (OldIp =/= SrcIp) orelse (OldPort =/= TcpPort);
+                _ ->
+                    true
+            end
+    end.
+
+maybe_print_discovery(NodeId, SrcIp, TcpPort, true) ->
+    io:format("Nodo descubierto: ~s (~p:~w)~n", [NodeId, SrcIp, TcpPort]);
+maybe_print_discovery(_NodeId, _SrcIp, _TcpPort, false) ->
+    ok.
