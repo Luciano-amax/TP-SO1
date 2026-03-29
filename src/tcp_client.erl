@@ -1,10 +1,11 @@
 % Cliente TCP para conexiones salientes a otros nodos
 -module(tcp_client).
+-include("config.hrl").
 -export([send_request/3, send_request/4]).
 
 % Envia un request a un nodo remoto
 send_request(Ip, Port, Request) ->
-    send_request(Ip, Port, Request, 5000).
+    send_request(Ip, Port, Request, ?SEARCH_TIMEOUT).
 
 % Envia una request con timeout configurable
 send_request(Ip, Port, Request, Timeout) ->

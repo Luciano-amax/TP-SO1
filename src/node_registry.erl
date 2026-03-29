@@ -1,4 +1,5 @@
 -module(node_registry).
+-include("config.hrl").
 -export([start/0, stop/0, add_node/3, get_all_nodes/0, get_node/1, cleanup_inactive_nodes/0]).
 
 -record(node_info, {id, ip, port, last_seen}).
@@ -43,7 +44,7 @@ cleanup_inactive_nodes() ->
     ok.
 
 init() ->
-    erlang:send_after(30000, self(), cleanup_inactive),
+    erlang:send_after(?CLEANUP_INTERVAL, self(), cleanup_inactive),
     loop(#{}).
 
 loop(Nodes) ->
@@ -90,14 +91,14 @@ loop(Nodes) ->
             NewNodes = maps:filter(fun(_NodeId, Info) ->
                 TimeSinceLastSeen = Now - Info#node_info.last_seen,
                 if 
-                    TimeSinceLastSeen > 45 ->
+                    TimeSinceLastSeen > ?NODE_TIMEOUT_SECONDS ->
                         io:format("Nodo inactivo: ~s~n", [Info#node_info.id]),
                         false;
                     true ->
                         true
                 end
             end, Nodes),
-            erlang:send_after(30000, self(), cleanup_inactive),
+            erlang:send_after(?CLEANUP_INTERVAL, self(), cleanup_inactive),
             loop(NewNodes);
         
         stop ->

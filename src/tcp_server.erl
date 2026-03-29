@@ -116,7 +116,7 @@ handle_download_request(Socket, FileName) ->
         {ok, Data, Size} ->
             send_file(Socket, Data, Size);
         {error, not_found} ->
-            gen_tcp:send(Socket, <<112>>)
+            gen_tcp:send(Socket, <<?CODE_NOTFOUND>>)
     end,
     gen_tcp:close(Socket).
 
@@ -126,10 +126,10 @@ handle_chunk_request(Socket, FileName, ChunkId) ->
         {ok, Data} ->
             Size = byte_size(Data),
             % Para la descarga por chunk se envia solo el fragmento pedido.
-            Msg = <<101, Size:32/integer-big, Data/binary>>,
+            Msg = <<?CODE_OK, Size:32/integer-big, Data/binary>>,
             gen_tcp:send(Socket, Msg);
         {error, not_found} ->
-            gen_tcp:send(Socket, <<112>>)
+            gen_tcp:send(Socket, <<?CODE_NOTFOUND>>)
     end,
     gen_tcp:close(Socket).
 
@@ -169,7 +169,7 @@ extract_chunk_from_file(FileData, ChunkId) ->
     end.
 
 send_file(Socket, Data, Size) ->
-    Code = <<101>>,
+    Code = <<?CODE_OK>>,
     SizeBin = <<Size:32/integer-big>>,
     
     if
@@ -203,7 +203,7 @@ send_chunks(Socket, Data, ChunkIndex, ChunkSize) ->
         DataSize >= ChunkSize ->
             <<Chunk:ChunkSize/binary, Rest/binary>> = Data,
             % El tamaño real de cada chunk se envía en 16 bits como indica el TP.
-            Msg = <<111, ChunkIndex:16/integer-big, ChunkSize:16/integer-big, Chunk/binary>>,
+            Msg = <<?CODE_CHUNK, ChunkIndex:16/integer-big, ChunkSize:16/integer-big, Chunk/binary>>,
             case gen_tcp:send(Socket, Msg) of
                 ok ->
                     send_chunks(Socket, Rest, ChunkIndex + 1, ChunkSize);
@@ -212,7 +212,7 @@ send_chunks(Socket, Data, ChunkIndex, ChunkSize) ->
             end;
         DataSize > 0 ->
             % Ultimo chunk (menor a 4MB)
-            Msg = <<111, ChunkIndex:16/integer-big, DataSize:16/integer-big, Data/binary>>,
+            Msg = <<?CODE_CHUNK, ChunkIndex:16/integer-big, DataSize:16/integer-big, Data/binary>>,
             case gen_tcp:send(Socket, Msg) of
                 ok -> ok;
                 {error, Reason} ->

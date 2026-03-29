@@ -80,7 +80,7 @@ receive_file_payload(Socket, FileName, Size) ->
     end.
 
 receive_small_file(Socket, FileName, Size) ->
-    case gen_tcp:recv(Socket, Size, 30000) of
+    case gen_tcp:recv(Socket, Size, ?CHUNK_TIMEOUT) of
         {ok, Data} ->
             save_file(FileName, Data),
             io:format("Descarga completa: ~s~n", [FileName]),
@@ -115,7 +115,7 @@ receive_chunks_loop(Socket, FilePath) ->
                     case gen_tcp:recv(Socket, 2, 5000) of
                         {ok, ChunkSizeBin} ->
                             <<ChunkSize:16/integer-big>> = ChunkSizeBin,
-                            case gen_tcp:recv(Socket, ChunkSize, 30000) of
+                            case gen_tcp:recv(Socket, ChunkSize, ?CHUNK_TIMEOUT) of
                                 {ok, ChunkData} ->
                                     file:write_file(FilePath, ChunkData, [append]),
                                     receive_chunks_loop(Socket, FilePath);
@@ -312,7 +312,7 @@ receive_requested_chunk(Socket, FileName, ChunkId) ->
             case gen_tcp:recv(Socket, 4, 5000) of
                 {ok, SizeBin} ->
                     <<Size:32/integer-big>> = SizeBin,
-                    case gen_tcp:recv(Socket, Size, 30000) of
+                    case gen_tcp:recv(Socket, Size, ?CHUNK_TIMEOUT) of
                         {ok, ChunkData} ->
                             save_chunk(FileName, ChunkId, ChunkData),
                             ok;

@@ -82,7 +82,7 @@ read_manual_or_auto() ->
     Option = io:get_line("Manual o automático? (m/a): "),
     case normalize_choice(Option) of
         "m" -> string:trim(io:get_line("Ingrese nuevo ID: "));
-        _ -> generate_random_id(4)
+        _ -> generate_random_id(?NODE_ID_LENGTH)
     end.
 
 normalize_choice(Option) ->
@@ -92,7 +92,7 @@ normalize_choice(Option) ->
 
 % Genera un ID aleatorio de N caracteres
 generate_random_id(N) ->
-    Chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
+    Chars = ?NODE_ID_CHARS,
     lists:map(fun(_) -> 
         lists:nth(rand:uniform(length(Chars)), Chars) 
     end, lists:seq(1, N)).

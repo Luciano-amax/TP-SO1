@@ -11,6 +11,7 @@ command_loop() ->
     case Line of
         eof ->
             io:format("~nSaliendo...~n"),
+            notify_cli_closed(),
             ok;
         _ ->
             Command = string:trim(Line),
@@ -83,12 +84,9 @@ process_command("descargar " ++ Rest) ->
 
 process_command("salir") ->
     io:format("Cerrando...~n"),
-    hello_broadcast:stop(),
-    discovery:stop(),
-    tcp_server:stop(),
-    file_manager:stop(),
-    node_registry:stop(),
-    erlang:halt(0);
+    p2p_node:stop(),
+    notify_cli_closed(),
+    exit(normal);
 
 % Comando desconocido
 process_command(Unknown) ->
@@ -106,3 +104,11 @@ print_help() ->
     io:format("  descargar <archivo> <nodo> - Descarga de un nodo especifico~n"),
     io:format("  salir                - Cierra el nodo P2P~n"),
     io:format("  ayuda                - Muestra esta ayuda~n~n").
+
+notify_cli_closed() ->
+    case whereis(p2p_node) of
+        undefined ->
+            ok;
+        Pid ->
+            Pid ! {cli_stopped, self()}
+    end.
