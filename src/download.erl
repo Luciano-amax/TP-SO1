@@ -19,7 +19,7 @@ connect_and_download(Ip, Port, FileName) ->
                 ok ->
                     Result = receive_file(Socket, FileName),
                     gen_tcp:close(Socket),
-                    Result;
+                    maybe_verify_download(Result, FileName, Ip, Port);
                 {error, SendReason} ->
                     gen_tcp:close(Socket),
                     io:format("Error de envio: ~p~n", [SendReason]),
@@ -260,7 +260,7 @@ start_multi_download(FileName, SearchResults) ->
         end, lists:seq(1, WorkersPerNode))
     end, SourceNodes),
 
-    wait_for_completion(FileName, TotalWorkers).
+    wait_for_completion(FileName, TotalWorkers, SourceNodes).
 
 extract_source_nodes(SearchResults) ->
     lists:usort([NodeId || {NodeId, _, _, _} <- SearchResults]).
@@ -337,13 +337,13 @@ save_chunk(FileName, ChunkId, Data) ->
     ChunkPath = filename:join(ChunkDir, io_lib:format("~s.chunk~p", [FileName, ChunkId])),
     file:write_file(ChunkPath, Data).
 
-wait_for_completion(FileName, RemainingWorkers) ->
+wait_for_completion(FileName, RemainingWorkers, SourceNodes) ->
     case download_manager:is_complete(FileName) of
         {ok, true} ->
             io:format("~nTodos los chunks descargados, ensamblando...~n"),
             case assemble_file(FileName) of
                 ok ->
-                    verify_assembled_file(FileName),
+                    verify_assembled_file(FileName, SourceNodes),
                     download_manager:stop();
                 {error, Reason} ->
                     io:format("Error ensamblando archivo: ~p~n", [Reason]),
@@ -353,10 +353,10 @@ wait_for_completion(FileName, RemainingWorkers) ->
             receive
                 {worker_done, NodeId} ->
                     io:format("Worker ~s terminado~n", [NodeId]),
-                    wait_for_completion(FileName, RemainingWorkers - 1);
+                    wait_for_completion(FileName, RemainingWorkers - 1, SourceNodes);
                 {worker_error, NodeId, ChunkId} ->
                     io:format("Error en worker ~s chunk ~p, reintentando...~n", [NodeId, ChunkId]),
-                    wait_for_completion(FileName, RemainingWorkers)
+                    wait_for_completion(FileName, RemainingWorkers, SourceNodes)
             after ?DOWNLOAD_TIMEOUT ->
                 io:format("Timeout esperando descarga~n"),
                 download_manager:stop()
@@ -394,15 +394,102 @@ assemble_file(FileName) ->
     io:format("Archivo ensamblado: ~s~n", [FileName]),
     ok.
 
-verify_assembled_file(FileName) ->
+verify_assembled_file(FileName, SourceNodes) ->
     FinalPath = filename:join(?DOWNLOAD_DIR, FileName),
     case file:read_file(FinalPath) of
-        {ok, _Data} ->
+        {ok, Data} ->
             io:format("Archivo descargado: ~s~n", [FileName]),
-            io:format("Descarga completada~n");
+            verify_file_data(FileName, Data, SourceNodes);
         {error, Reason} ->
             io:format("Error verificando archivo: ~p~n", [Reason])
     end.
+
+maybe_verify_download({ok, FileName}, FileName, Ip, Port) ->
+    FilePath = filename:join(?DOWNLOAD_DIR, FileName),
+    case file:read_file(FilePath) of
+        {ok, Data} ->
+            verify_file_data(FileName, Data, [{Ip, Port}]);
+        {error, Reason} ->
+            io:format("Error verificando archivo: ~p~n", [Reason]),
+            {error, Reason}
+    end;
+maybe_verify_download(Result, _FileName, _Ip, _Port) ->
+    Result.
+
+verify_file_data(FileName, Data, Sources) ->
+    LocalHash = binary_to_hex(crypto:hash(sha256, Data)),
+    case get_expected_checksum(FileName, Sources) of
+        {ok, RemoteHash} ->
+            case LocalHash =:= RemoteHash of
+                true ->
+                    io:format("Descarga completada [VERIFICADO]~n"),
+                    {ok, FileName};
+                false ->
+                    io:format("ADVERTENCIA: checksum no coincide para ~s~n", [FileName]),
+                    io:format("  Esperado: ~s~n", [RemoteHash]),
+                    io:format("  Obtenido: ~s~n", [LocalHash]),
+                    {error, checksum_mismatch}
+            end;
+        {error, not_supported} ->
+            io:format("Descarga completada~n"),
+            io:format("No se pudo verificar integridad con el nodo origen~n"),
+            {ok, FileName};
+        {error, Reason} ->
+            io:format("Descarga completada~n"),
+            io:format("No se pudo verificar integridad: ~p~n", [Reason]),
+            {ok, FileName}
+    end.
+
+get_expected_checksum(_FileName, []) ->
+    {error, no_sources};
+get_expected_checksum(FileName, [{Ip, Port} | Rest]) when is_tuple(Ip) ->
+    case request_remote_checksum(Ip, Port, FileName) of
+        {ok, Hash} -> {ok, Hash};
+        _ -> get_expected_checksum(FileName, Rest)
+    end;
+get_expected_checksum(FileName, [NodeId | Rest]) ->
+    case node_registry:get_node(NodeId) of
+        {ok, {_Id, Ip, Port}} ->
+            case request_remote_checksum(Ip, Port, FileName) of
+                {ok, Hash} -> {ok, Hash};
+                _ -> get_expected_checksum(FileName, Rest)
+            end;
+        _ ->
+            get_expected_checksum(FileName, Rest)
+    end.
+
+request_remote_checksum(Ip, Port, FileName) ->
+    case gen_tcp:connect(Ip, Port, [binary, {active, false}, {reuseaddr, true}], 5000) of
+        {ok, Socket} ->
+            Request = io_lib:format("CHECKSUM_REQUEST ~s~n", [FileName]),
+            case gen_tcp:send(Socket, Request) of
+                ok ->
+                    Response = gen_tcp:recv(Socket, 0, ?SEARCH_TIMEOUT),
+                    gen_tcp:close(Socket),
+                    parse_checksum_response(Response);
+                {error, Reason} ->
+                    gen_tcp:close(Socket),
+                    {error, Reason}
+            end;
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+parse_checksum_response({ok, Data}) ->
+    Tokens = string:tokens(string:trim(binary_to_list(Data)), " "),
+    case Tokens of
+        ["CHECKSUM_RESPONSE", Hash] ->
+            {ok, Hash};
+        ["CHECKSUM_NOTFOUND"] ->
+            {error, not_found};
+        _ ->
+            {error, not_supported}
+    end;
+parse_checksum_response({error, Reason}) ->
+    {error, Reason}.
+
+binary_to_hex(Bin) ->
+    lists:flatten([io_lib:format("~2.16.0B", [Byte]) || <<Byte>> <= Bin]).
 
 parse_chunk_id(FilePath) ->
     BaseName = filename:basename(FilePath),

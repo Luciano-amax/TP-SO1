@@ -87,6 +87,8 @@ process_request(Socket, RequestStr, IsDownload) ->
     case Tokens of
         ["SEARCH_REQUEST", _NodeId, Pattern] ->
             handle_search_request(Socket, Pattern);
+        ["CHECKSUM_REQUEST", FileName] ->
+            handle_checksum_request(Socket, FileName);
         ["DOWNLOAD_REQUEST", FileName] ->
             handle_download_request(Socket, FileName);
         ["DOWNLOAD_CHUNK", FileName, ChunkIdStr] ->
@@ -110,6 +112,17 @@ handle_search_request(Socket, Pattern) ->
         Response = io_lib:format("SEARCH_RESPONSE ~s ~s ~p ~s~n", [MyNodeId, FileName, Size, Status]),
         gen_tcp:send(Socket, Response)
     end, Files).
+
+% Esta extension devuelve el sha256 del archivo para verificar integridad.
+handle_checksum_request(Socket, FileName) ->
+    case file_manager:get_file(FileName) of
+        {ok, Data, _Size} ->
+            HashHex = binary_to_hex(crypto:hash(sha256, Data)),
+            Response = io_lib:format("CHECKSUM_RESPONSE ~s~n", [HashHex]),
+            gen_tcp:send(Socket, Response);
+        {error, not_found} ->
+            gen_tcp:send(Socket, "CHECKSUM_NOTFOUND\n")
+    end.
 
 handle_download_request(Socket, FileName) ->
     case file_manager:get_file(FileName) of
@@ -224,6 +237,9 @@ send_chunks(Socket, Data, ChunkIndex, ChunkSize) ->
 
 transfer_chunk_size() ->
     65535.
+
+binary_to_hex(Bin) ->
+    lists:flatten([io_lib:format("~2.16.0B", [Byte]) || <<Byte>> <= Bin]).
 
 format_chunk_status({complete, _TotalChunks}) ->
     "COMPLETE";
