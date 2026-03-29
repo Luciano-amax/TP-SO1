@@ -4,11 +4,13 @@
 
 -record(node_info, {id, ip, port, last_seen}).
 
+% Arranca el proceso que guarda los nodos conocidos.
 start() ->
     Pid = spawn(fun() -> init() end),
     register(node_registry, Pid),
     ok.
 
+% Detiene el registro de nodos.
 stop() ->
     case whereis(node_registry) of
         undefined -> ok;
@@ -18,10 +20,12 @@ stop() ->
             ok
     end.
 
+% Agrega o actualiza la informacion de un nodo visto en la red.
 add_node(NodeId, Ip, Port) ->
     node_registry ! {add_node, NodeId, Ip, Port},
     ok.
 
+% Devuelve todos los nodos conocidos en formato simple.
 get_all_nodes() ->
     node_registry ! {get_all_nodes, self()},
     receive
@@ -30,6 +34,7 @@ get_all_nodes() ->
         []
     end.
 
+% Busca un nodo puntual por su ID.
 get_node(NodeId) ->
     node_registry ! {get_node, NodeId, self()},
     receive
@@ -39,14 +44,17 @@ get_node(NodeId) ->
         {error, timeout}
     end.
 
+% Fuerza manualmente la limpieza de nodos inactivos.
 cleanup_inactive_nodes() ->
     node_registry ! cleanup_inactive,
     ok.
 
+% Programa la limpieza periodica y arranca con el mapa vacio.
 init() ->
     erlang:send_after(?CLEANUP_INTERVAL, self(), cleanup_inactive),
     loop(#{}).
 
+% Mantiene el estado del registro y responde consultas.
 loop(Nodes) ->
     receive
         {add_node, NodeId, Ip, Port} ->
@@ -88,6 +96,7 @@ loop(Nodes) ->
         
         cleanup_inactive ->
             Now = erlang:system_time(second),
+            % Se descartan los nodos que hace rato no mandan HELLO.
             NewNodes = maps:filter(fun(_NodeId, Info) ->
                 TimeSinceLastSeen = Now - Info#node_info.last_seen,
                 if 

@@ -2,10 +2,12 @@
 -module(cli).
 -export([start/0]).
 
+% Arranca la interfaz y muestra los comandos disponibles.
 start() ->
     print_help(),
     command_loop().
 
+% Mantiene el loop principal de lectura de comandos.
 command_loop() ->
     Line = io:get_line("p2p> "),
     case Line of
@@ -19,17 +21,21 @@ command_loop() ->
             command_loop()
     end.
 
+% Ignora lineas vacias para no ensuciar la salida.
 process_command("") ->
     ok;
 
+% Vuelve a mostrar la ayuda desde la CLI.
 process_command("ayuda") ->
     print_help();
 
+% Consulta el ID guardado en el coordinador del nodo.
 process_command("id_nodo") ->
     NodeId = case whereis(p2p_node) of
         undefined -> 
             "desconocido";
         Pid -> 
+            % El coordinador guarda el estado en su diccionario de proceso.
             case process_info(Pid, dictionary) of
                 {dictionary, Dict} ->
                     proplists:get_value(node_id, Dict, "desconocido");
@@ -38,6 +44,7 @@ process_command("id_nodo") ->
     end,
     io:format("NodoID: ~s~n", [NodeId]);
 
+% Muestra la lista local de archivos compartidos.
 process_command("listar_mis_archivos") ->
     Files = file_manager:get_shared_files(),
     io:format("~nArchivos compartidos:~n"),
@@ -51,6 +58,7 @@ process_command("listar_mis_archivos") ->
             end, Files)
     end;
 
+% Imprime los nodos conocidos por el registro local.
 process_command("getNodes") ->
     Nodes = node_registry:get_all_nodes(),
     io:format("~nNodos conocidos:~n"),
@@ -63,14 +71,17 @@ process_command("getNodes") ->
             end, Nodes)
     end;
 
+% Dispara una busqueda distribuida por patron.
 process_command("buscar " ++ Pattern) ->
     search:search_all_nodes(Pattern);
 
+% Interpreta la descarga simple o multi-fuente segun los parametros.
 process_command("descargar " ++ Rest) ->
     Parts = string:tokens(Rest, " "),
     case length(Parts) of
         1 ->
             FileName = lists:nth(1, Parts),
+            % La descarga corre aparte para no clavar la CLI.
             spawn(fun() -> download:download_multi_source(FileName) end),
             ok;
         2 ->
@@ -82,6 +93,7 @@ process_command("descargar " ++ Rest) ->
             io:format("Uso: descargar <archivo> [nodo]~n")
     end;
 
+% Pide el cierre ordenado del nodo y termina la CLI.
 process_command("salir") ->
     io:format("Cerrando...~n"),
     p2p_node:stop(),
@@ -105,6 +117,7 @@ print_help() ->
     io:format("  salir                - Cierra el nodo P2P~n"),
     io:format("  ayuda                - Muestra esta ayuda~n~n").
 
+% Le avisa al coordinador que este proceso de CLI ya termino.
 notify_cli_closed() ->
     case whereis(p2p_node) of
         undefined ->

@@ -3,9 +3,11 @@
 -export([start_link/0, init/1]).
 
 % Supervisor para los procesos principales del sistema P2P
+% Levanta el supervisor raiz del sistema.
 start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
+% Define la estrategia de reinicio y los hijos base.
 init([]) ->
     % Estrategia: one_for_one - si un proceso falla, solo se reinicia ese proceso
     % Intensidad: 5 reinicios en 60 segundos antes de rendirse

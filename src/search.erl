@@ -2,6 +2,7 @@
 -export([search_all_nodes/1]).
 -include("config.hrl").
 
+% Hace la busqueda local y remota, y despues junta todos los resultados.
 search_all_nodes(Pattern) ->
     {ok, MyNodeId} = get_node_id(),
     Nodes = node_registry:get_all_nodes(),
@@ -25,6 +26,7 @@ search_in_node(Parent, MyNodeId, Ip, Port, Pattern) ->
             Request = io_lib:format("SEARCH_REQUEST ~s ~s~n", [MyNodeId, Pattern]),
             gen_tcp:send(Socket, Request),
             
+            % Un mismo nodo puede responder varias lineas si encuentra varios archivos.
             Results = receive_all_responses(Socket, []),
             gen_tcp:close(Socket),
             Parent ! {search_result, Results};
@@ -78,12 +80,14 @@ parse_chunk_status("CHUNKS:" ++ ChunkList) ->
 parse_chunk_status(_) ->
     complete.
 
+% Convierte los resultados propios al mismo formato que usan los remotos.
 get_local_results(MyNodeId, Pattern) ->
     Files = file_manager:search_files(Pattern),
     % Los archivos propios se informan como completos porque forman
     % parte de la carpeta compartida del nodo local.
     [{MyNodeId, FileName, Size, complete} || {FileName, Size} <- Files].
 
+% Espera respuestas de todos los nodos o corta por timeout.
 collect_results(0, Results) ->
     display_results(Results);
 collect_results(Remaining, Results) ->
@@ -94,6 +98,7 @@ collect_results(Remaining, Results) ->
         display_results(Results)
     end.
 
+% Muestra los resultados finales de forma unificada.
 display_results([]) ->
     io:format("~nSin resultados.~n~n");
 display_results(Results) ->

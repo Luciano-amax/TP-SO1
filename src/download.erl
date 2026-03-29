@@ -11,6 +11,7 @@ download_from_node(FileName, NodeId) ->
             io:format("Nodo no encontrado: ~s~n", [NodeId])
     end.
 
+% Abre la conexion TCP y delega la recepcion del archivo.
 connect_and_download(Ip, Port, FileName) ->
     case gen_tcp:connect(Ip, Port, [binary, {active, false}, {reuseaddr, true}], ?TCP_CONNECT_TIMEOUT) of
         {ok, Socket} ->
@@ -36,6 +37,7 @@ connect_and_download(Ip, Port, FileName) ->
             {error, Reason}
     end.
 
+% Lee la cabecera inicial y decide si el archivo existe o no.
 receive_file(Socket, FileName) ->
     case gen_tcp:recv(Socket, 1, ?TCP_HEADER_TIMEOUT) of
         {ok, <<?CODE_OK>>} ->
@@ -79,6 +81,7 @@ receive_file_payload(Socket, FileName, Size) ->
             receive_small_file(Socket, FileName, Size)
     end.
 
+% Recibe un archivo chico de una sola vez y lo guarda en descargas.
 receive_small_file(Socket, FileName, Size) ->
     case gen_tcp:recv(Socket, Size, ?CHUNK_TIMEOUT) of
         {ok, Data} ->
@@ -96,6 +99,7 @@ receive_small_file(Socket, FileName, Size) ->
             {error, Reason}
     end.
 
+% Prepara el archivo final y empieza a recibir la secuencia de chunks.
 receive_chunked_file(Socket, FileName) ->
     FilePath = filename:join(?DOWNLOAD_DIR, FileName),
     file:delete(FilePath),
@@ -107,6 +111,7 @@ receive_chunked_file(Socket, FileName) ->
             Error
     end.
 
+% Recibe todos los chunks del protocolo base hasta que el socket cierre.
 receive_chunks_loop(Socket, FilePath) ->
     case gen_tcp:recv(Socket, 1, ?TCP_HEADER_TIMEOUT) of
         {ok, <<?CODE_CHUNK>>} ->
@@ -117,6 +122,7 @@ receive_chunks_loop(Socket, FilePath) ->
                             <<ChunkSize:16/integer-big>> = ChunkSizeBin,
                             case gen_tcp:recv(Socket, ChunkSize, ?CHUNK_TIMEOUT) of
                                 {ok, ChunkData} ->
+                                    % Cada chunk se agrega al archivo destino en orden de llegada.
                                     file:write_file(FilePath, ChunkData, [append]),
                                     receive_chunks_loop(Socket, FilePath);
                                 {error, closed} ->
@@ -155,6 +161,7 @@ receive_chunks_loop(Socket, FilePath) ->
             {error, Reason}
     end.
 
+% Guarda un archivo completo en la carpeta de descargas.
 save_file(FileName, Data) ->
     filelib:ensure_dir(?DOWNLOAD_DIR ++ "/"),
     FilePath = filename:join(?DOWNLOAD_DIR, FileName),
@@ -185,6 +192,7 @@ download_multi_source(FileName) ->
             start_multi_download(FileName, SearchResults)
     end.
 
+% Consulta a un nodo remoto si tiene el archivo buscado.
 search_in_node(Parent, MyNodeId, Ip, Port, FileName) ->
     case gen_tcp:connect(Ip, Port, [binary, {active, false}, {reuseaddr, true}], ?SEARCH_TIMEOUT) of
         {ok, Socket} ->
@@ -197,6 +205,7 @@ search_in_node(Parent, MyNodeId, Ip, Port, FileName) ->
             Parent ! {search_result, []}
     end.
 
+% Reune todas las respuestas SEARCH_RESPONSE de un mismo nodo.
 receive_search_responses(Socket, FileName, Acc) ->
     case gen_tcp:recv(Socket, 0, 1000) of
         {ok, Data} ->
@@ -209,6 +218,7 @@ receive_search_responses(Socket, FileName, Acc) ->
             Acc
     end.
 
+% Toma solo las respuestas que coinciden con el archivo pedido.
 parse_search_for_file(Line, FileName) ->
     Tokens = string:tokens(string:trim(Line), " "),
     case Tokens of
@@ -223,6 +233,7 @@ parse_search_for_file(Line, FileName) ->
             false
     end.
 
+% Interpreta el estado de chunks informado por la busqueda.
 parse_chunk_status("COMPLETE") ->
     complete;
 parse_chunk_status("CHUNKS:" ++ ChunkList) ->
@@ -231,6 +242,7 @@ parse_chunk_status("CHUNKS:" ++ ChunkList) ->
 parse_chunk_status(_) ->
     complete.
 
+% Junta respuestas de varios nodos hasta completar o vencer el timeout.
 collect_search_results(0, Results) ->
     Results;
 collect_search_results(Remaining, Results) ->
@@ -241,6 +253,7 @@ collect_search_results(Remaining, Results) ->
         Results
     end.
 
+% Inicializa el estado compartido y lanza los workers por cada fuente.
 start_multi_download(FileName, SearchResults) ->
     [{_, _, TotalSize, _} | _] = SearchResults,
     ChunkSize = ?CHUNK_SIZE,
@@ -262,9 +275,11 @@ start_multi_download(FileName, SearchResults) ->
 
     wait_for_completion(FileName, TotalWorkers, SourceNodes).
 
+% Extrae la lista unica de nodos que pueden servir el archivo.
 extract_source_nodes(SearchResults) ->
     lists:usort([NodeId || {NodeId, _, _, _} <- SearchResults]).
 
+% Pide trabajo al coordinador y descarga chunks hasta quedarse sin tareas.
 download_worker(Parent, FileName, NodeId) ->
     case download_manager:assign_chunk(FileName, NodeId) of
         {ok, ChunkId} ->
@@ -277,6 +292,7 @@ download_worker(Parent, FileName, NodeId) ->
                     download_manager:mark_chunk_failed(FileName, ChunkId),
                     io:format("Error descargando chunk ~p desde ~s: ~p~n", [ChunkId, NodeId, Reason]),
                     Parent ! {worker_error, NodeId, ChunkId},
+                    % Si la fuente cayo de verdad, este worker ya no sigue insistiendo.
                     case should_stop_worker(Reason) of
                         true ->
                             io:format("Worker ~s detenido: nodo no disponible~n", [NodeId]),
@@ -312,6 +328,7 @@ download_chunk_from_node(FileName, ChunkId, NodeId) ->
             {error, node_not_found}
     end.
 
+% Recibe un chunk puntual pedido con la extension DOWNLOAD_CHUNK.
 receive_requested_chunk(Socket, FileName, ChunkId) ->
     case gen_tcp:recv(Socket, 1, ?TCP_HEADER_TIMEOUT) of
         {ok, <<?CODE_OK>>} ->
@@ -337,12 +354,14 @@ receive_requested_chunk(Socket, FileName, ChunkId) ->
             {error, Reason}
     end.
 
+% Guarda cada chunk en disco para poder ensamblarlo al final.
 save_chunk(FileName, ChunkId, Data) ->
     ChunkDir = filename:join(?DOWNLOAD_DIR, "chunks"),
     filelib:ensure_dir(ChunkDir ++ "/"),
     ChunkPath = filename:join(ChunkDir, io_lib:format("~s.chunk~p", [FileName, ChunkId])),
     file:write_file(ChunkPath, Data).
 
+% Espera a que terminen los workers o a que la descarga quede completa.
 wait_for_completion(FileName, RemainingWorkers, SourceNodes) ->
     case download_manager:is_complete(FileName) of
         {ok, true} ->
@@ -361,6 +380,7 @@ wait_for_completion(FileName, RemainingWorkers, SourceNodes) ->
                     io:format("Worker ~s terminado~n", [NodeId]),
                     wait_for_completion(FileName, RemainingWorkers - 1, SourceNodes);
                 {worker_error, NodeId, ChunkId} ->
+                    % El reintento real lo hace otro pedido al coordinador.
                     io:format("Error en worker ~s chunk ~p, reintentando...~n", [NodeId, ChunkId]),
                     wait_for_completion(FileName, RemainingWorkers, SourceNodes)
             after ?DOWNLOAD_TIMEOUT ->
@@ -369,6 +389,7 @@ wait_for_completion(FileName, RemainingWorkers, SourceNodes) ->
             end
     end.
 
+% Une todos los chunks descargados y arma el archivo final.
 assemble_file(FileName) ->
     ChunkDir = filename:join(?DOWNLOAD_DIR, "chunks"),
     Pattern = filename:join(ChunkDir, FileName ++ ".chunk*"),
@@ -400,6 +421,7 @@ assemble_file(FileName) ->
     io:format("Archivo ensamblado: ~s~n", [FileName]),
     ok.
 
+% Lee el archivo ensamblado y dispara la verificacion de integridad.
 verify_assembled_file(FileName, SourceNodes) ->
     FinalPath = filename:join(?DOWNLOAD_DIR, FileName),
     case file:read_file(FinalPath) of
@@ -410,6 +432,7 @@ verify_assembled_file(FileName, SourceNodes) ->
             io:format("Error verificando archivo: ~p~n", [Reason])
     end.
 
+% Verifica la descarga simple si efectivamente termino bien.
 maybe_verify_download({ok, FileName}, FileName, Ip, Port) ->
     FilePath = filename:join(?DOWNLOAD_DIR, FileName),
     case file:read_file(FilePath) of
@@ -422,6 +445,7 @@ maybe_verify_download({ok, FileName}, FileName, Ip, Port) ->
 maybe_verify_download(Result, _FileName, _Ip, _Port) ->
     Result.
 
+% Compara el hash local con el hash informado por algun nodo fuente.
 verify_file_data(FileName, Data, Sources) ->
     LocalHash = binary_to_hex(crypto:hash(sha256, Data)),
     case get_expected_checksum(FileName, Sources) of
@@ -446,6 +470,7 @@ verify_file_data(FileName, Data, Sources) ->
             {ok, FileName}
     end.
 
+% Va probando distintas fuentes hasta conseguir un checksum valido.
 get_expected_checksum(_FileName, []) ->
     {error, no_sources};
 get_expected_checksum(FileName, [{Ip, Port} | Rest]) when is_tuple(Ip) ->
@@ -464,6 +489,7 @@ get_expected_checksum(FileName, [NodeId | Rest]) ->
             get_expected_checksum(FileName, Rest)
     end.
 
+% Pide el checksum remoto con una extension separada del flujo de descarga.
 request_remote_checksum(Ip, Port, FileName) ->
     case gen_tcp:connect(Ip, Port, [binary, {active, false}, {reuseaddr, true}], ?TCP_CONNECT_TIMEOUT) of
         {ok, Socket} ->
@@ -481,6 +507,7 @@ request_remote_checksum(Ip, Port, FileName) ->
             {error, Reason}
     end.
 
+% Interpreta la respuesta del pedido de checksum.
 parse_checksum_response({ok, Data}) ->
     Tokens = string:tokens(string:trim(binary_to_list(Data)), " "),
     case Tokens of
@@ -494,9 +521,11 @@ parse_checksum_response({ok, Data}) ->
 parse_checksum_response({error, Reason}) ->
     {error, Reason}.
 
+% Convierte el hash binario a texto hexadecimal para poder compararlo.
 binary_to_hex(Bin) ->
     lists:flatten([io_lib:format("~2.16.0B", [Byte]) || <<Byte>> <= Bin]).
 
+% Decide cuando conviene dejar de usar una fuente caida o no disponible.
 should_stop_worker(node_not_found) ->
     true;
 should_stop_worker(connection_refused) ->
@@ -512,6 +541,7 @@ should_stop_worker(econnrefused) ->
 should_stop_worker(_) ->
     false.
 
+% Extrae el indice del chunk a partir del nombre de archivo temporal.
 parse_chunk_id(FilePath) ->
     BaseName = filename:basename(FilePath),
     case string:split(BaseName, ".chunk", trailing) of
@@ -523,6 +553,7 @@ parse_chunk_id(FilePath) ->
         _ -> error
     end.
 
+% Lee el ID del nodo desde el coordinador principal.
 get_node_id() ->
     case whereis(p2p_node) of
         undefined ->

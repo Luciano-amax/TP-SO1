@@ -2,11 +2,13 @@
 -include("config.hrl").
 -export([start/1, stop/0]).
 
+% Arranca el servidor TCP que escucha pedidos entrantes.
 start(Port) ->
     Pid = spawn(fun() -> init_server(Port) end),
     register(tcp_server, Pid),
     ok.
 
+% Detiene el servidor TCP si estaba levantado.
 stop() ->
     case whereis(tcp_server) of
         undefined -> ok;
@@ -16,6 +18,7 @@ stop() ->
             ok
     end.
 
+% Abre el socket de escucha en el puerto indicado.
 init_server(Port) ->
     {ok, ListenSocket} = gen_tcp:listen(Port, [binary, 
                                                 {packet, 0}, 
@@ -23,6 +26,7 @@ init_server(Port) ->
                                                 {reuseaddr, true}]),
     accept_loop(ListenSocket).
 
+% Acepta clientes y crea un proceso para cada conexion.
 accept_loop(ListenSocket) ->
     case gen_tcp:accept(ListenSocket) of
         {ok, Socket} ->
@@ -37,6 +41,7 @@ accept_loop(ListenSocket) ->
             accept_loop(ListenSocket)
     end.
 
+% Encierra el handler real para que un error no tire todo el servidor.
 handle_client_safe(Socket) ->
     try
         handle_client(Socket)
@@ -49,6 +54,7 @@ handle_client_safe(Socket) ->
             gen_tcp:close(Socket)
     end.
 
+% Lee el pedido del cliente y decide como cerrar la conexion.
 handle_client(Socket) ->
     case gen_tcp:recv(Socket, 0, 30000) of
         {ok, Data} ->
@@ -124,6 +130,7 @@ handle_checksum_request(Socket, FileName) ->
             gen_tcp:send(Socket, "CHECKSUM_NOTFOUND\n")
     end.
 
+% Atiende la descarga simple usando el protocolo base.
 handle_download_request(Socket, FileName) ->
     case file_manager:get_file(FileName) of
         {ok, Data, Size} ->
@@ -181,6 +188,7 @@ extract_chunk_from_file(FileData, ChunkId) ->
             {ok, Chunk}
     end.
 
+% Envia el archivo segun el formato base definido para la descarga.
 send_file(Socket, Data, Size) ->
     Code = <<?CODE_OK>>,
     SizeBin = <<Size:32/integer-big>>,
@@ -235,12 +243,15 @@ send_chunks(Socket, Data, ChunkIndex, ChunkSize) ->
             ok
     end.
 
+% Fija un tamano compatible con el campo real de 16 bits del chunk.
 transfer_chunk_size() ->
     65535.
 
+% Convierte un hash binario a texto hexadecimal.
 binary_to_hex(Bin) ->
     lists:flatten([io_lib:format("~2.16.0B", [Byte]) || <<Byte>> <= Bin]).
 
+% Traduce el estado del archivo al formato que viaja en SEARCH_RESPONSE.
 format_chunk_status({complete, _TotalChunks}) ->
     "COMPLETE";
 format_chunk_status({partial, ChunkIds}) ->

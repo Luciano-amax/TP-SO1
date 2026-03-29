@@ -14,6 +14,7 @@ start(TcpPort) ->
             {error, Reason}
     end.
 
+% Inicializa los componentes del nodo y deja corriendo al coordinador.
 init_node(TcpPort, Caller) ->
     catch unregister(p2p_node),
     catch unregister(file_manager),
@@ -59,12 +60,14 @@ init_node(TcpPort, Caller) ->
     Caller ! {node_started, self()},
     node_loop(Caller).
 
+% Espera hasta que el coordinador confirme que termino el apagado.
 wait_until_stopped() ->
     receive
         node_stopped ->
             ok
     end.
 
+% Mantiene vivo al coordinador y recibe mensajes de control.
 node_loop(Caller) ->
     receive
         stop ->
@@ -88,9 +91,11 @@ stop() ->
             ok
     end.
 
+% Cierra los procesos hijos registrados en el estado del coordinador.
 shutdown_node() ->
     case process_info(self(), dictionary) of
         {dictionary, Dict} ->
+            % La salida se hace de forma ordenada para no dejar procesos sueltos.
             case proplists:get_value(cli, Dict) of
                 undefined -> ok;
                 CliPid -> exit(CliPid, shutdown)

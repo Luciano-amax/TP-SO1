@@ -10,6 +10,7 @@ start() ->
     register(file_manager, Pid),
     ok.
 
+% Detiene el proceso del manejador de archivos.
 stop() ->
     case whereis(file_manager) of
         undefined -> ok;
@@ -49,6 +50,7 @@ init() ->
     io:format("Archivos escaneados: ~p~n", [length(Files)]),
     loop(Files).
 
+% Mantiene en memoria la lista de archivos compartidos.
 loop(Files) ->
     receive
         {get_files, From} ->
@@ -129,6 +131,7 @@ get_available_chunks(FileName) ->
     end.
 
 % Busca archivos de chunks en disco
+% Busca en disco los archivos de chunk ya descargados.
 find_chunk_files(Dir, FileName) ->
     Pattern = filename:join(Dir, FileName ++ ".chunk*"),
     Files = filelib:wildcard(Pattern),
@@ -152,5 +155,6 @@ parse_chunk_id(FilePath) ->
     end.
 
 % Calcula cantidad total de chunks
+% Calcula cuantos chunks se necesitan para un archivo completo.
 calculate_total_chunks(TotalSize, ChunkSize) ->
     (TotalSize + ChunkSize - 1) div ChunkSize.

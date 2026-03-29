@@ -17,6 +17,7 @@
     active_downloads  % #{ChunkId => NodeId}
 }).
 
+% Arranca el proceso que coordina las descargas multi-fuente.
 start() ->
     case whereis(download_manager) of
         undefined ->
@@ -27,6 +28,7 @@ start() ->
             ok  % Ya existe, reutilizarlo
     end.
 
+% Detiene el coordinador de descargas.
 stop() ->
     case whereis(download_manager) of
         undefined -> ok;
@@ -122,11 +124,13 @@ get_download_state(FileName) ->
     end.
 
 % Loop principal que mantiene el estado de todas las descargas
+% Mantiene el estado de las descargas y responde a los workers.
 loop(Downloads) ->
     receive
         {init_download, FileName, TotalSize, ChunkSize, SearchResults, From} ->
             TotalChunks = calculate_total_chunks(TotalSize, ChunkSize),
             ChunkSources = build_chunk_sources(SearchResults, TotalChunks),
+            % Todos los chunks arrancan pendientes hasta que algun worker los tome.
             ChunksStatus = maps:from_list([{I, pending} || I <- lists:seq(0, TotalChunks - 1)]),
             
             State = #download_state{
@@ -258,6 +262,7 @@ calculate_total_chunks(TotalSize, ChunkSize) ->
     (TotalSize + ChunkSize - 1) div ChunkSize.
 
 % Construye mapa de que nodos tienen cada chunk
+% Arma el mapa que indica que nodo puede servir cada chunk.
 build_chunk_sources(SearchResults, TotalChunks) ->
     ChunkMap = maps:new(),
     lists:foldl(fun(Result, Acc) ->
@@ -290,6 +295,7 @@ find_available_chunk(State, NodeId) ->
     end.
 
 % Invierte el mapa de chunk_sources para obtener chunks por nodo
+% Da vuelta el mapa para ver rapidamente que chunks ofrece cada nodo.
 invert_chunk_sources(ChunkSources) ->
     maps:fold(fun(ChunkId, Nodes, Acc) ->
         lists:foldl(fun(NodeId, AccMap) ->
@@ -304,11 +310,13 @@ calculate_progress(State) ->
     (Complete / State#download_state.total_chunks) * 100.
 
 % Obtiene lista de chunks que no estan completos
+% Devuelve solo los chunks que aun faltan completar.
 get_missing_chunks_list(State) ->
     [ChunkId || {ChunkId, Status} <- maps:to_list(State#download_state.chunks_status),
                 Status =/= complete].
 
 % Verifica si todos los chunks estan completos
+% Revisa si la descarga ya no tiene chunks pendientes.
 all_chunks_complete(State) ->
     lists:all(fun({_ChunkId, Status}) -> Status =:= complete end,
               maps:to_list(State#download_state.chunks_status)).

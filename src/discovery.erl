@@ -3,6 +3,7 @@
 -include("config.hrl").
 -export([start/2, stop/0, get_node_id/0, request_node_id/0]).
 
+% Pide un ID unico usando un socket temporal durante el arranque.
 request_node_id() ->
     UdpPort = ?UDP_PORT,
     % Abrimos el socket UDP para broadcasts
@@ -57,6 +58,7 @@ start(UdpPort, TcpPort) ->
             {error, Reason}
     end.
 
+% Detiene el proceso de descubrimiento y cierra el socket UDP.
 stop() ->
     case whereis(discovery) of
         undefined -> ok;
@@ -66,6 +68,7 @@ stop() ->
             ok
     end.
 
+% Devuelve el ID que quedo acordado para este nodo.
 get_node_id() ->
     case whereis(discovery) of
         undefined -> undefined;
@@ -78,6 +81,7 @@ get_node_id() ->
             end
     end.
 
+% Permite elegir un ID manual o generar uno automaticamente.
 read_manual_or_auto() ->
     Option = io:get_line("Manual o automático? (m/a): "),
     case normalize_choice(Option) of
@@ -85,6 +89,7 @@ read_manual_or_auto() ->
         _ -> generate_random_id(?NODE_ID_LENGTH)
     end.
 
+% Normaliza la opcion ingresada en la consola.
 normalize_choice(Option) ->
     Clean = string:replace(Option, "\r", "", [global]),
     Lower = string:to_lower(string:trim(Clean)),
@@ -210,6 +215,7 @@ handle_message(Socket, SrcIp, SrcPort, Message, MyNodeId, MyTcpPort, RequestedId
             ok
     end.
 
+% Responde un HELLO directo para acelerar el descubrimiento mutuo.
 maybe_reply_hello(Socket, SrcIp, SrcPort, MyNodeId, MyTcpPort) ->
     case SrcPort =:= ?UDP_PORT of
         true ->
@@ -235,6 +241,7 @@ parse_message(Message) ->
             {unknown, Message}
     end.
 
+% Decide si conviene mostrar en consola el descubrimiento de un nodo.
 should_log_discovery(NodeId, SrcIp, TcpPort) ->
     case ?SHOW_DISCOVERY_LOGS of
         false ->
@@ -248,6 +255,7 @@ should_log_discovery(NodeId, SrcIp, TcpPort) ->
             end
     end.
 
+% Imprime el descubrimiento solo cuando la config lo habilita.
 maybe_print_discovery(NodeId, SrcIp, TcpPort, true) ->
     io:format("Nodo descubierto: ~s (~p:~w)~n", [NodeId, SrcIp, TcpPort]);
 maybe_print_discovery(_NodeId, _SrcIp, _TcpPort, false) ->
