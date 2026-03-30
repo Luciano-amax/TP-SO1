@@ -26,7 +26,7 @@
 -define(PROCESS_REPLY_TIMEOUT, 5000).
 
 %% Protocolo
--define(CHUNK_SIZE, 4194304).
+-define(CHUNK_SIZE, 1048576).
 -define(LARGE_FILE_THRESHOLD, 4194304).
 -define(WORKERS_PER_NODE, 2).
 

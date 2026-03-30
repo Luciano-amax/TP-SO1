@@ -81,6 +81,7 @@ is_download_request(RequestStr) ->
     Msg = string:trim(RequestStr),
     case string:tokens(Msg, " ") of
         ["DOWNLOAD_REQUEST" | _] -> true;
+        ["DOWNLOAD_CHUNK_REQUEST" | _] -> true;
         ["DOWNLOAD_CHUNK" | _] -> true;
         _ -> false
     end.
@@ -97,6 +98,9 @@ process_request(Socket, RequestStr, IsDownload) ->
             handle_checksum_request(Socket, FileName);
         ["DOWNLOAD_REQUEST", FileName] ->
             handle_download_request(Socket, FileName);
+        ["DOWNLOAD_CHUNK_REQUEST", FileName, ChunkListStr] ->
+            ChunkIds = [list_to_integer(Value) || Value <- string:tokens(ChunkListStr, ",")],
+            handle_multi_chunk_request(Socket, FileName, ChunkIds);
         ["DOWNLOAD_CHUNK", FileName, ChunkIdStr] ->
             {ChunkId, _} = string:to_integer(ChunkIdStr),
             handle_chunk_request(Socket, FileName, ChunkId);
@@ -114,8 +118,11 @@ handle_search_request(Socket, Pattern) ->
     Files = file_manager:search_files(Pattern),
     
     lists:foreach(fun({FileName, Size}) ->
-        Status = format_chunk_status(file_manager:get_available_chunks(FileName)),
-        Response = io_lib:format("SEARCH_RESPONSE ~s ~s ~p ~s~n", [MyNodeId, FileName, Size, Status]),
+        {HashHex, ChunkCount, BitfieldStr} = build_search_metadata(FileName, Size),
+        Response = io_lib:format(
+            "SEARCH_RESPONSE ~s ~s ~p ~s ~p ~s~n",
+            [MyNodeId, FileName, Size, HashHex, ChunkCount, BitfieldStr]
+        ),
         gen_tcp:send(Socket, Response)
     end, Files).
 
@@ -137,6 +144,25 @@ handle_download_request(Socket, FileName) ->
             send_file(Socket, Data, Size);
         {error, not_found} ->
             gen_tcp:send(Socket, <<?CODE_NOTFOUND>>)
+    end,
+    gen_tcp:close(Socket).
+
+% Atiende la descarga de varios chunks pedidos en una sola conexion.
+handle_multi_chunk_request(Socket, FileName, ChunkIds) ->
+    case ChunkIds of
+        [] ->
+            gen_tcp:send(Socket, <<?CODE_NOTFOUND>>);
+        _ ->
+            lists:foreach(fun(ChunkId) ->
+                case get_chunk_data(FileName, ChunkId) of
+                    {ok, ChunkData} ->
+                        ChunkSize = byte_size(ChunkData),
+                        Msg = <<?CODE_CHUNK, ChunkId:16/integer-big, ChunkSize:32/integer-big, ChunkData/binary>>,
+                        gen_tcp:send(Socket, Msg);
+                    {error, not_found} ->
+                        ok
+                end
+            end, ChunkIds)
     end,
     gen_tcp:close(Socket).
 
@@ -192,6 +218,7 @@ extract_chunk_from_file(FileData, ChunkId) ->
 send_file(Socket, Data, Size) ->
     Code = <<?CODE_OK>>,
     SizeBin = <<Size:32/integer-big>>,
+    HashBin = crypto:hash(sha256, Data),
     
     if
         % El protocolo base usa chunks solo cuando el archivo supera los 4MB.
@@ -202,12 +229,17 @@ send_file(Socket, Data, Size) ->
             Msg = <<Code/binary, SizeBin/binary, TransferChunkSize:32/integer-big>>,
             case gen_tcp:send(Socket, Msg) of
                 ok -> 
-                    send_chunks(Socket, Data, 0, TransferChunkSize);
+                    case send_chunks(Socket, Data, 0, TransferChunkSize) of
+                        ok ->
+                            gen_tcp:send(Socket, HashBin);
+                        {error, Reason} ->
+                            {error, Reason}
+                    end;
                 {error, Reason} ->
                     {error, Reason}
             end;
         true ->
-            Msg = <<Code/binary, SizeBin/binary, Data/binary>>,
+            Msg = <<Code/binary, SizeBin/binary, HashBin/binary, Data/binary>>,
             case gen_tcp:send(Socket, Msg) of
                 ok -> ok;
                 {error, Reason} ->
@@ -224,7 +256,7 @@ send_chunks(Socket, Data, ChunkIndex, ChunkSize) ->
         DataSize >= ChunkSize ->
             <<Chunk:ChunkSize/binary, Rest/binary>> = Data,
             % El tamaño real de cada chunk se envía en 16 bits como indica el TP.
-            Msg = <<?CODE_CHUNK, ChunkIndex:16/integer-big, ChunkSize:16/integer-big, Chunk/binary>>,
+            Msg = <<?CODE_CHUNK, ChunkIndex:16/integer-big, ChunkSize:32/integer-big, Chunk/binary>>,
             case gen_tcp:send(Socket, Msg) of
                 ok ->
                     send_chunks(Socket, Rest, ChunkIndex + 1, ChunkSize);
@@ -233,7 +265,7 @@ send_chunks(Socket, Data, ChunkIndex, ChunkSize) ->
             end;
         DataSize > 0 ->
             % Ultimo chunk (menor a 4MB)
-            Msg = <<?CODE_CHUNK, ChunkIndex:16/integer-big, DataSize:16/integer-big, Data/binary>>,
+            Msg = <<?CODE_CHUNK, ChunkIndex:16/integer-big, DataSize:32/integer-big, Data/binary>>,
             case gen_tcp:send(Socket, Msg) of
                 ok -> ok;
                 {error, Reason} ->
@@ -245,20 +277,21 @@ send_chunks(Socket, Data, ChunkIndex, ChunkSize) ->
 
 % Fija un tamano compatible con el campo real de 16 bits del chunk.
 transfer_chunk_size() ->
-    65535.
+    ?CHUNK_SIZE.
+
+build_search_metadata(FileName, Size) ->
+    ChunkCount = max(1, (Size + ?CHUNK_SIZE - 1) div ?CHUNK_SIZE),
+    BitfieldStr = lists:duplicate(ChunkCount, $1),
+    case file_manager:get_file(FileName) of
+        {ok, Data, _} ->
+            {binary_to_hex(crypto:hash(sha256, Data)), ChunkCount, BitfieldStr};
+        _ ->
+            {"unknown", ChunkCount, BitfieldStr}
+    end.
 
 % Convierte un hash binario a texto hexadecimal.
 binary_to_hex(Bin) ->
     lists:flatten([io_lib:format("~2.16.0B", [Byte]) || <<Byte>> <= Bin]).
-
-% Traduce el estado del archivo al formato que viaja en SEARCH_RESPONSE.
-format_chunk_status({complete, _TotalChunks}) ->
-    "COMPLETE";
-format_chunk_status({partial, ChunkIds}) ->
-    ChunkText = string:join([integer_to_list(Id) || Id <- ChunkIds], ","),
-    "CHUNKS:" ++ ChunkText;
-format_chunk_status(not_found) ->
-    "COMPLETE".
 
 % Obtiene el NodeId del proceso p2p_node
 get_node_id() ->

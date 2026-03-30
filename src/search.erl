@@ -51,6 +51,14 @@ receive_all_responses(Socket, Acc) ->
 parse_search_response(Line) ->
     Tokens = string:tokens(string:trim(Line), " "),
     case Tokens of
+        ["SEARCH_RESPONSE", NodeId, FileName, SizeStr, _HashHex, _ChunkCountStr, BitfieldStr] ->
+            case string:to_integer(SizeStr) of
+                {Size, _} when is_integer(Size) ->
+                    ChunkInfo = parse_bitfield_status(BitfieldStr),
+                    {true, {NodeId, FileName, Size, ChunkInfo}};
+                _ ->
+                    false
+            end;
         ["SEARCH_RESPONSE", NodeId, FileName, SizeStr, Status | _Rest] ->
             case string:to_integer(SizeStr) of
                 {Size, _} when is_integer(Size) ->
@@ -79,6 +87,18 @@ parse_chunk_status("CHUNKS:" ++ ChunkList) ->
     {partial, ChunkIds};
 parse_chunk_status(_) ->
     complete.
+
+parse_bitfield_status(BitfieldStr) ->
+    IndexedBits = lists:zip(lists:seq(0, length(BitfieldStr) - 1), BitfieldStr),
+    ChunkIds = [Idx || {Idx, Bit} <- IndexedBits, Bit =:= $1],
+    case ChunkIds of
+        [] ->
+            complete;
+        _ when length(ChunkIds) =:= length(BitfieldStr) ->
+            complete;
+        _ ->
+            {partial, ChunkIds}
+    end.
 
 % Convierte los resultados propios al mismo formato que usan los remotos.
 get_local_results(MyNodeId, Pattern) ->

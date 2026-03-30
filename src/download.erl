@@ -72,7 +72,7 @@ receive_file_payload(Socket, FileName, Size) ->
         Size > ?LARGE_FILE_THRESHOLD ->
             case gen_tcp:recv(Socket, 4, ?TCP_HEADER_TIMEOUT) of
                 {ok, <<_TransferChunkSize:32/integer-big>>} ->
-                    receive_chunked_file(Socket, FileName);
+                    receive_chunked_file(Socket, FileName, Size);
                 {error, ChunkReason} ->
                     io:format("Error metadata: ~p~n", [ChunkReason]),
                     {error, chunk_metadata_failed}
@@ -83,11 +83,29 @@ receive_file_payload(Socket, FileName, Size) ->
 
 % Recibe un archivo chico de una sola vez y lo guarda en descargas.
 receive_small_file(Socket, FileName, Size) ->
-    case gen_tcp:recv(Socket, Size, ?CHUNK_TIMEOUT) of
-        {ok, Data} ->
-            save_file(FileName, Data),
-            io:format("Descarga completa: ~s~n", [FileName]),
-            {ok, FileName};
+    case gen_tcp:recv(Socket, 32, ?CHUNK_TIMEOUT) of
+        {ok, ExpectedHash} ->
+            case gen_tcp:recv(Socket, Size, ?CHUNK_TIMEOUT) of
+                {ok, Data} ->
+                    case crypto:hash(sha256, Data) =:= ExpectedHash of
+                        true ->
+                            save_file(FileName, Data),
+                            io:format("Descarga completa: ~s~n", [FileName]),
+                            {ok, FileName, verified};
+                        false ->
+                            io:format("Error de integridad en la descarga de ~s~n", [FileName]),
+                            {error, checksum_mismatch}
+                    end;
+                {error, closed} ->
+                    io:format("Conexion cerrada~n"),
+                    {error, connection_closed};
+                {error, timeout} ->
+                    io:format("Timeout~n"),
+                    {error, download_timeout};
+                {error, Reason} ->
+                    io:format("Error recepcion: ~p~n", [Reason]),
+                    {error, Reason}
+            end;
         {error, closed} ->
             io:format("Conexion cerrada~n"),
             {error, connection_closed};
@@ -95,67 +113,64 @@ receive_small_file(Socket, FileName, Size) ->
             io:format("Timeout~n"),
             {error, download_timeout};
         {error, Reason} ->
-            io:format("Error recepcion: ~p~n", [Reason]),
+            io:format("Error hash: ~p~n", [Reason]),
             {error, Reason}
     end.
 
 % Prepara el archivo final y empieza a recibir la secuencia de chunks.
-receive_chunked_file(Socket, FileName) ->
+receive_chunked_file(Socket, FileName, TotalSize) ->
     FilePath = filename:join(?DOWNLOAD_DIR, FileName),
     file:delete(FilePath),
-    case receive_chunks_loop(Socket, FilePath) of
+    case receive_chunks_loop(Socket, FilePath, TotalSize, 0, crypto:hash_init(sha256)) of
         {ok, _} ->
             io:format("Descarga completa: ~s~n", [FileName]),
-            {ok, FileName};
+            {ok, FileName, verified};
         Error ->
             Error
     end.
 
 % Recibe todos los chunks del protocolo base hasta que el socket cierre.
-receive_chunks_loop(Socket, FilePath) ->
-    case gen_tcp:recv(Socket, 1, ?TCP_HEADER_TIMEOUT) of
-        {ok, <<?CODE_CHUNK>>} ->
-            case gen_tcp:recv(Socket, 2, ?TCP_HEADER_TIMEOUT) of
-                {ok, _IndexBin} ->
-                    case gen_tcp:recv(Socket, 2, ?TCP_HEADER_TIMEOUT) of
-                        {ok, ChunkSizeBin} ->
-                            <<ChunkSize:16/integer-big>> = ChunkSizeBin,
-                            case gen_tcp:recv(Socket, ChunkSize, ?CHUNK_TIMEOUT) of
-                                {ok, ChunkData} ->
-                                    % Cada chunk se agrega al archivo destino en orden de llegada.
-                                    file:write_file(FilePath, ChunkData, [append]),
-                                    receive_chunks_loop(Socket, FilePath);
-                                {error, closed} ->
-                                    io:format("Descarga parcial guardada~n"),
-                                    {error, connection_closed_during_chunk};
-                                {error, timeout} ->
-                                    io:format("Timeout en chunk~n"),
-                                    {error, chunk_timeout};
-                                {error, Reason} ->
-                                    io:format("Error chunk: ~p~n", [Reason]),
-                                    {error, Reason}
-                            end;
-                        {error, closed} ->
-                            {ok, FilePath};
-                        {error, timeout} ->
-                            {ok, FilePath};
-                        {error, Reason} ->
-                            io:format("Error tamano: ~p~n", [Reason]),
-                            {error, Reason}
-                    end;
-                {error, closed} ->
+receive_chunks_loop(Socket, FilePath, TotalSize, BytesReceived, HashCtx) when BytesReceived >= TotalSize ->
+    case gen_tcp:recv(Socket, 32, ?CHUNK_TIMEOUT) of
+        {ok, ExpectedHash} ->
+            case crypto:hash_final(HashCtx) =:= ExpectedHash of
+                true ->
                     {ok, FilePath};
+                false ->
+                    io:format("Error de integridad en la descarga de chunks~n"),
+                    {error, checksum_mismatch}
+            end;
+        {error, Reason} ->
+            io:format("Error recibiendo hash final: ~p~n", [Reason]),
+            {error, Reason}
+    end;
+receive_chunks_loop(Socket, FilePath, TotalSize, BytesReceived, HashCtx) ->
+    case gen_tcp:recv(Socket, 7, ?TCP_HEADER_TIMEOUT) of
+        {ok, <<?CODE_CHUNK, _ChunkIndex:16/integer-big, ChunkSize:32/integer-big>>} ->
+            case gen_tcp:recv(Socket, ChunkSize, ?CHUNK_TIMEOUT) of
+                {ok, ChunkData} ->
+                    file:write_file(FilePath, ChunkData, [append]),
+                    NewCtx = crypto:hash_update(HashCtx, ChunkData),
+                    receive_chunks_loop(
+                        Socket,
+                        FilePath,
+                        TotalSize,
+                        BytesReceived + byte_size(ChunkData),
+                        NewCtx
+                    );
+                {error, closed} ->
+                    io:format("Descarga parcial guardada~n"),
+                    {error, connection_closed_during_chunk};
+                {error, timeout} ->
+                    io:format("Timeout en chunk~n"),
+                    {error, chunk_timeout};
                 {error, Reason} ->
-                    io:format("Error indice: ~p~n", [Reason]),
+                    io:format("Error chunk: ~p~n", [Reason]),
                     {error, Reason}
             end;
         {ok, _Other} ->
             io:format("Formato invalido~n"),
             {error, invalid_chunk_format};
-        {error, timeout} ->
-            {ok, FilePath};
-        {error, closed} ->
-            {ok, FilePath};
         {error, Reason} ->
             io:format("Error transferencia: ~p~n", [Reason]),
             {error, Reason}
@@ -222,6 +237,10 @@ receive_search_responses(Socket, FileName, Acc) ->
 parse_search_for_file(Line, FileName) ->
     Tokens = string:tokens(string:trim(Line), " "),
     case Tokens of
+        ["SEARCH_RESPONSE", NodeId, FoundFile, SizeStr, _HashHex, _ChunkCountStr, BitfieldStr] when FoundFile =:= FileName ->
+            {Size, _} = string:to_integer(SizeStr),
+            ChunkInfo = parse_bitfield_status(BitfieldStr),
+            {true, {NodeId, FoundFile, Size, ChunkInfo}};
         ["SEARCH_RESPONSE", NodeId, FoundFile, SizeStr, Status | _Rest] when FoundFile =:= FileName ->
             {Size, _} = string:to_integer(SizeStr),
             ChunkInfo = parse_chunk_status(Status),
@@ -241,6 +260,18 @@ parse_chunk_status("CHUNKS:" ++ ChunkList) ->
     {partial, ChunkIds};
 parse_chunk_status(_) ->
     complete.
+
+parse_bitfield_status(BitfieldStr) ->
+    IndexedBits = lists:zip(lists:seq(0, length(BitfieldStr) - 1), BitfieldStr),
+    ChunkIds = [Idx || {Idx, Bit} <- IndexedBits, Bit =:= $1],
+    case ChunkIds of
+        [] ->
+            complete;
+        _ when length(ChunkIds) =:= length(BitfieldStr) ->
+            complete;
+        _ ->
+            {partial, ChunkIds}
+    end.
 
 % Junta respuestas de varios nodos hasta completar o vencer el timeout.
 collect_search_results(0, Results) ->
@@ -311,7 +342,7 @@ download_chunk_from_node(FileName, ChunkId, NodeId) ->
         {ok, {_Id, Ip, Port}} ->
             case gen_tcp:connect(Ip, Port, [binary, {active, false}, {reuseaddr, true}], ?TCP_CONNECT_TIMEOUT) of
                 {ok, Socket} ->
-                    Request = io_lib:format("DOWNLOAD_CHUNK ~s ~p~n", [FileName, ChunkId]),
+                    Request = io_lib:format("DOWNLOAD_CHUNK_REQUEST ~s ~p~n", [FileName, ChunkId]),
                     case gen_tcp:send(Socket, Request) of
                         ok ->
                             Result = receive_requested_chunk(Socket, FileName, ChunkId),
@@ -331,6 +362,21 @@ download_chunk_from_node(FileName, ChunkId, NodeId) ->
 % Recibe un chunk puntual pedido con la extension DOWNLOAD_CHUNK.
 receive_requested_chunk(Socket, FileName, ChunkId) ->
     case gen_tcp:recv(Socket, 1, ?TCP_HEADER_TIMEOUT) of
+        {ok, <<?CODE_CHUNK>>} ->
+            case gen_tcp:recv(Socket, 6, ?TCP_HEADER_TIMEOUT) of
+                {ok, <<ReceivedChunkId:16/integer-big, Size:32/integer-big>>} ->
+                    case gen_tcp:recv(Socket, Size, ?CHUNK_TIMEOUT) of
+                        {ok, ChunkData} when ReceivedChunkId =:= ChunkId ->
+                            save_chunk(FileName, ChunkId, ChunkData),
+                            ok;
+                        {ok, _ChunkData} ->
+                            {error, wrong_chunk};
+                        {error, Reason} ->
+                            {error, Reason}
+                    end;
+                {error, Reason} ->
+                    {error, Reason}
+            end;
         {ok, <<?CODE_OK>>} ->
             case gen_tcp:recv(Socket, 4, ?TCP_HEADER_TIMEOUT) of
                 {ok, SizeBin} ->
@@ -442,6 +488,9 @@ maybe_verify_download({ok, FileName}, FileName, Ip, Port) ->
             io:format("Error verificando archivo: ~p~n", [Reason]),
             {error, Reason}
     end;
+maybe_verify_download({ok, FileName, verified}, FileName, _Ip, _Port) ->
+    io:format("Descarga completada [VERIFICADO]~n"),
+    {ok, FileName};
 maybe_verify_download(Result, _FileName, _Ip, _Port) ->
     Result.
 
