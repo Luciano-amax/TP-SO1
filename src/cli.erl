@@ -59,7 +59,7 @@ process_command("listar_mis_archivos") ->
     end;
 
 % Imprime los nodos conocidos por el registro local.
-process_command("getNodes") ->
+process_command("listar_nodos") ->
     Nodes = node_registry:get_all_nodes(),
     io:format("~nNodos conocidos:~n"),
     case Nodes of
@@ -110,7 +110,7 @@ print_help() ->
     io:format("~nComandos disponibles:~n"),
     io:format("  id_nodo              - Muestra el ID unico del nodo~n"),
     io:format("  listar_mis_archivos  - Lista los archivos compartidos~n"),
-    io:format("  getNodes             - Lista los nodos conocidos en la red~n"),
+    io:format("  listar_nodos         - Lista los nodos conocidos en la red~n"),
     io:format("  buscar <patron>      - Busca archivos en la red~n"),
     io:format("  descargar <archivo>  - Descarga desde multiples nodos~n"),
     io:format("  descargar <archivo> <nodo> - Descarga de un nodo especifico~n"),

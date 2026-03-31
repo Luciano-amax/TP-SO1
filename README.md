@@ -50,14 +50,24 @@ Edita el archivo `src/config.hrl` para ajustar parámetros según tu red:
 -define(DOWNLOAD_DIR, "./descargas").   % Carpeta de descargas
 
 %% Timeouts (en milisegundos)
--define(HELLO_INTERVAL_MIN, 15000).    % 15 segundos
--define(HELLO_INTERVAL_MAX, 20000).    % 20 segundos
--define(NODE_TIMEOUT, 45000).          % Inactividad máxima de nodo
--define(DOWNLOAD_TIMEOUT, 300000).     % Timeout para descargas
+-define(ID_REQUEST_TIMEOUT, 3000). 
+-define(HELLO_INTERVAL_MIN, 5000).  
+-define(HELLO_INTERVAL_MAX, 8000).  
+-define(NODE_TIMEOUT, 20000).
+-define(NODE_TIMEOUT_SECONDS, 20).
+-define(CLEANUP_INTERVAL, 10000).
+
+-define(SEARCH_TIMEOUT, 5000).
+-define(DOWNLOAD_TIMEOUT, 180000).
+-define(CHUNK_TIMEOUT, 15000).
+-define(TCP_CONNECT_TIMEOUT, 8000).
+-define(TCP_HEADER_TIMEOUT, 8000).
+-define(PROCESS_REPLY_TIMEOUT, 5000).
 
 %% Protocolo
--define(CHUNK_SIZE, 4194304).          % Tamaño de chunk: 4MB
--define(LARGE_FILE_THRESHOLD, 4194304).% Umbral para descarga en chunks
+-define(CHUNK_SIZE, 4194304).           % Tamaño de chunk: 4MB
+-define(LARGE_FILE_THRESHOLD, 4194304). % Umbral para descarga en chunks
+-define(WORKERS_PER_NODE, 2).           % Hilos que se asignan a la descarga por chunks
 
 %% Broadcast (ajusta según tu red)
 -define(BROADCAST_ADDR, {25, 255, 255, 255}).  % Para Hamachi
@@ -105,7 +115,7 @@ p2p> ayuda
 Comandos disponibles:
   id_nodo              - Muestra el ID unico del nodo
   listar_mis_archivos  - Lista los archivos compartidos
-  getNodes             - Lista los nodos conocidos en la red
+  listar_nodos         - Lista los nodos conocidos en la red
   buscar <patron>      - Busca archivos en la red
   descargar <archivo>  - Descarga desde multiples nodos
   descargar <archivo> <nodo> - Descarga de un nodo especifico
@@ -133,11 +143,11 @@ Archivos compartidos:
   imagen.jpg (5.20 MB)
 ```
 
-#### `getNodes`
+#### `listar_nodos`
 Muestra la lista de todos los nodos conocidos en la red, incluyendo su ID, dirección IP y puerto TCP. Se actualiza automáticamente a través de broadcasts HELLO.
 
 ```
-p2p> getNodes
+p2p> listar_nodos
 
 Nodos conocidos:
   aB3x (192.168.1.100:12345)
@@ -177,7 +187,7 @@ Búsqueda completa. Resultados:
 Inicia una descarga del archivo especificado desde múltiples nodos en paralelo. El sistema busca automáticamente el archivo y elige la mejor estrategia:
 
 - **Archivos pequeños (≤ 4MB)**: Se descargan completos desde un nodo
-- **Archivos grandes (> 4MB)**: Se dividen en chunks de 4MB y se descargan en paralelo desde múltiples nodos simultáneamente (4 workers por nodo)
+- **Archivos grandes (> 4MB)**: Se dividen en chunks de 4MB y se descargan en paralelo desde múltiples nodos simultáneamente (2 workers por nodo)
 
 Los chunks se almacenan temporalmente en `descargas/chunks/`, y cuando termina la descarga, se ensamblan en el archivo final en `descargas/`.
 
@@ -190,7 +200,7 @@ Ejemplo:
 ```
 p2p> descargar documento.pdf
 Buscando nodos con documento.pdf...
-Iniciando descarga paralela (2 nodos, 8 workers)
+Iniciando descarga paralela (2 nodos, 4 workers)
 Descargando chunk 0 de nodo aB3x
 Descargando chunk 1 de nodo kXy2
 Descargando chunk 2 de nodo aB3x
@@ -256,11 +266,11 @@ p2p>
 
 ### Sincronización de nodos
 - Los nodos tardan 15-20 segundos en descubrirse mutuamente
-- Los broadcasts HELLO se envían cada 15-20 segundos de forma aleatoria
-- Un nodo se considera inactivo si no envía HELLO en 45 segundos
+- Los broadcasts HELLO se envían cada 5-8 segundos de forma aleatoria
+- Un nodo se considera inactivo si no envía HELLO en 20 segundos
 
 ### Descargas paralelas
-- Cada nodo origen genera 4 workers paralelos
+- Cada nodo origen genera 2 workers paralelos
 - El tamaño de chunk es de 4MB por defecto
 - Los chunks se descargan simultáneamente desde múltiples nodos
 

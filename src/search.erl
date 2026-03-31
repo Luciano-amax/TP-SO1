@@ -6,8 +6,7 @@
 search_all_nodes(Pattern) ->
     {ok, MyNodeId} = get_node_id(),
     Nodes = node_registry:get_all_nodes(),
-    % Se incorporan primero los resultados locales para cumplir con la
-    % búsqueda consolidada pedida por el enunciado del TP.
+    % Se incorporan primero los resultados locales 
     LocalResults = get_local_results(MyNodeId, Pattern),
     
     io:format("~nBuscando '~s'...~n", [Pattern]),
