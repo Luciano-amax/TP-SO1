@@ -99,7 +99,19 @@ Esto compilará todos los módulos automáticamente y abrirá la consola de Erla
 p2p_node:start(12345).   % Inicia el nodo en puerto TCP 12345
 ```
 
-Una vez iniciado, aparecerá el prompt `p2p> ` donde puedes ingresar comandos.
+**Opción: Elegir el ID del nodo manualmente**
+
+Durante el inicio, el sistema te preguntará interactivamente si deseas elegir un ID manualmente o usar uno automático:
+
+```
+Manual o automático? (m/a): m
+Ingrese nuevo ID: mi_id_unico
+```
+
+- Escribe `m` para especificar un ID personalizado (debe ser único en la red)
+- Escribe `a` para que el sistema genere un ID automáticamente mediante consenso distribuido
+
+Una vez completado este paso, aparecerá el prompt `p2p> ` donde puedes ingresar comandos.
 
 
 ## Comandos CLI
